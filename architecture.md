@@ -69,7 +69,8 @@ class BaseLLMProvider(ABC):
 ### 2.1 Provider Implementations
 - **`OllamaProvider` (`backend/llm/ollama_provider.py`):** Connects to the local Ollama daemon via HTTP (`http://localhost:11434/api/chat`). Uses model `qwen2.5:3b` with zero cloud network egress.
 - **`AnthropicProvider` (`backend/llm/anthropic_provider.py`):** Uses the official Anthropic Python SDK with `claude-3-5-sonnet-20241022`. Requires `ANTHROPIC_API_KEY`.
-- **Provider Factory (`backend/llm/factory.py`):** Resolves provider instances based on `LLM_PROVIDER=ollama|anthropic`. Enforces zero-fallback validation: missing cloud keys return explicit HTTP 400 Bad Request errors.
+- **`GeminiProvider` (`backend/llm/gemini_provider.py`):** Connects to Google AI Studio Generative Language API via `httpx` with `gemini-2.5-flash`. Free tier, zero billing required. Requires `GEMINI_API_KEY`.
+- **Provider Factory (`backend/llm/factory.py`):** Resolves provider instances based on `LLM_PROVIDER=ollama|anthropic|gemini`. Enforces zero-fallback validation: missing cloud keys return explicit HTTP 400 Bad Request errors.
 
 ---
 

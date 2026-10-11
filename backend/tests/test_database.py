@@ -75,6 +75,54 @@ def test_list_conversations_with_counts(db_session):
     assert c2_summary["message_count"] == 0
 
 
+def test_message_ordering_deterministic_on_identical_timestamp(db_session):
+    """
+    Regression test: When multiple messages share the exact same created_at timestamp,
+    secondary ordering ensures:
+    1. Reverse-chronological queries (list_conversations, get_last_message) return the assistant response.
+    2. Chronological queries (get_conversation_messages) preserve user -> assistant order.
+    """
+    from datetime import datetime, timezone
+
+    same_time = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+    crud.create_conversation(db_session, ConversationCreate(id="c-tie", title="Tie Breaking Conv"))
+
+    # Explicitly create user message and assistant message with identical created_at
+    msg_user = Message(
+        conversation_id="c-tie",
+        role="user",
+        content="What is product-market fit?",
+        created_at=same_time,
+    )
+    msg_assistant = Message(
+        conversation_id="c-tie",
+        role="assistant",
+        content="PMF is when retention curves flatten.",
+        created_at=same_time,
+    )
+    db_session.add(msg_user)
+    db_session.add(msg_assistant)
+    db_session.commit()
+
+    # 1. get_last_message should return the assistant response
+    last_msg = crud.get_last_message(db_session, "c-tie")
+    assert last_msg is not None
+    assert last_msg.role == "assistant"
+    assert "retention curves flatten" in last_msg.content
+
+    # 2. list_conversations summary should display the assistant response as last_message
+    summaries = crud.list_conversations(db_session)
+    tie_summary = next(s for s in summaries if s["id"] == "c-tie")
+    assert "retention curves flatten" in tie_summary["last_message"]
+
+    # 3. get_conversation_messages should return in chronological order: user -> assistant
+    messages = crud.get_conversation_messages(db_session, "c-tie")
+    assert len(messages) == 2
+    assert messages[0].role == "user"
+    assert messages[1].role == "assistant"
+
+
+
 def test_update_conversation_metadata(db_session):
     crud.create_conversation(db_session, ConversationCreate(id="c-update", title="Old Title"))
 

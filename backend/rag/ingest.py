@@ -36,6 +36,56 @@ PRIORITY_SLUGS = [
 ]
 
 
+PINNED_UPSTREAM_COMMIT = "be8ab89a890a833cbba2c892178f823fff178c65"
+PINNED_UPSTREAM_REPO = "https://github.com/ChatPRD/lennys-podcast-transcripts"
+PINNED_TARBALL_URL = f"https://github.com/ChatPRD/lennys-podcast-transcripts/archive/{PINNED_UPSTREAM_COMMIT}.tar.gz"
+
+
+def ensure_transcripts_available(transcripts_dir: Optional[Path] = None) -> Path:
+    """
+    Ensures that the episodes transcript directory exists. If local files are present,
+    returns target_dir immediately with zero network overhead. If absent in an ultra-sparse
+    clone, securely fetches and unpacks the pinned upstream release archive from GitHub.
+    """
+    target_dir = Path(transcripts_dir or DEFAULT_TRANSCRIPTS_DIR)
+    if target_dir.exists() and any(target_dir.glob("**/transcript.md")):
+        return target_dir
+
+    logger.info("Local transcripts missing at %s. Attempting download from pinned upstream release: %s", target_dir, PINNED_TARBALL_URL)
+    raw_dir = target_dir.parent  # backend/data/raw_transcripts
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    import urllib.request
+    import tarfile
+    import tempfile
+    import shutil
+
+    with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp_file:
+        tmp_path = Path(tmp_file.name)
+    try:
+        urllib.request.urlretrieve(PINNED_TARBALL_URL, tmp_path)
+        with tarfile.open(tmp_path, "r:gz") as tar:
+            extract_dir = raw_dir / "temp_extract"
+            if hasattr(tarfile, "data_filter"):
+                tar.extractall(path=extract_dir, filter="data")
+            else:
+                tar.extractall(path=extract_dir)
+            extracted_roots = list(extract_dir.glob("lennys-podcast-transcripts-*"))
+            if extracted_roots:
+                src_root = extracted_roots[0]
+                for item in src_root.iterdir():
+                    dest = raw_dir / item.name
+                    if not dest.exists():
+                        shutil.move(str(item), str(dest))
+            shutil.rmtree(extract_dir, ignore_errors=True)
+    except Exception as exc:
+        logger.warning("Failed to fetch pinned upstream transcripts archive: %s", exc)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+    return target_dir
+
+
 def run_ingestion(
     transcripts_dir: Optional[Path] = None,
     limit: Optional[int] = 15,
@@ -48,7 +98,7 @@ def run_ingestion(
     Ingests transcript markdown files into ChromaDB.
     Avoids duplicate chunks by relying on deterministic chunk IDs.
     """
-    data_dir = Path(transcripts_dir or DEFAULT_TRANSCRIPTS_DIR)
+    data_dir = ensure_transcripts_available(transcripts_dir)
     if not data_dir.exists():
         raise FileNotFoundError(f"Transcripts directory not found: {data_dir}")
 

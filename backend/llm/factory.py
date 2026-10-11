@@ -6,10 +6,11 @@ from fastapi import HTTPException, status
 from .base import BaseLLMProvider
 from .ollama_provider import OllamaProvider
 from .anthropic_provider import AnthropicProvider
+from .gemini_provider import GeminiProvider
 
 logger = logging.getLogger("lenny-growth-backend.llm.factory")
 
-SUPPORTED_PROVIDERS = ("ollama", "anthropic")
+SUPPORTED_PROVIDERS = ("ollama", "anthropic", "gemini")
 
 
 def get_llm_provider(
@@ -29,6 +30,8 @@ def get_llm_provider(
         return OllamaProvider(timeout=timeout)
     elif selected == "anthropic":
         return AnthropicProvider()
+    elif selected == "gemini":
+        return GeminiProvider()
     else:
         logger.error("Unknown LLM provider requested: '%s'", selected)
         raise HTTPException(

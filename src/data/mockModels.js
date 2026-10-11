@@ -54,5 +54,19 @@ export const mockModels = [
     isCloud: true,
     useAgent: true,
     status: 'Agent'
+  },
+  {
+    id: 'gemini-2.5-flash',
+    providerType: 'gemini',
+    name: 'Gemini 2.5 Flash',
+    version: 'Google AI Studio',
+    tag: 'Gemini · Free Cloud',
+    provider: 'Google AI Studio',
+    contextSize: '1M context',
+    description: 'Cloud LLM via Google Gemini API with free tier quota and strict RAG transcript grounding.',
+    isDefault: false,
+    isCloud: true,
+    useAgent: false,
+    status: 'Cloud'
   }
 ];

@@ -9,6 +9,7 @@ export function ModelSelector({ selectedModelId, onSelectModel, backendHealth })
   const selectedModel = mockModels.find((m) => m.id === selectedModelId) || mockModels[0];
   const isOllamaConnected = backendHealth?.ollama?.connected ?? true;
   const isAnthropicConfigured = backendHealth?.anthropic?.api_key_configured ?? false;
+  const isGeminiConfigured = backendHealth?.gemini?.api_key_configured ?? false;
 
   useEffect(() => {
     function handleClickOutside(event) {
@@ -31,7 +32,11 @@ export function ModelSelector({ selectedModelId, onSelectModel, backendHealth })
     };
   }, [isOpen]);
 
-  const activeIsReady = selectedModel.isCloud ? isAnthropicConfigured : isOllamaConnected;
+  const activeIsReady = selectedModel.providerType === 'gemini'
+    ? isGeminiConfigured
+    : selectedModel.isCloud
+    ? isAnthropicConfigured
+    : isOllamaConnected;
 
   return (
     <div className="relative" ref={dropdownRef}>
@@ -69,15 +74,20 @@ export function ModelSelector({ selectedModelId, onSelectModel, backendHealth })
               </span>
               <span className="text-[11px] font-mono text-outline">FastAPI Port 8000</span>
             </div>
-            <div className="flex items-center gap-3 mt-1.5 text-[11px]">
+            <div className="flex items-center gap-2 mt-1.5 text-[11px] flex-wrap">
               <span className="flex items-center gap-1">
                 <span className={`w-1.5 h-1.5 rounded-full ${isOllamaConnected ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-                Ollama: {isOllamaConnected ? 'Ready (Local)' : 'Offline'}
+                Ollama: {isOllamaConnected ? 'Ready' : 'Offline'}
+              </span>
+              <span className="text-outline">·</span>
+              <span className="flex items-center gap-1">
+                <span className={`w-1.5 h-1.5 rounded-full ${isGeminiConfigured ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                Gemini: {isGeminiConfigured ? 'Ready' : 'Key Req'}
               </span>
               <span className="text-outline">·</span>
               <span className="flex items-center gap-1">
                 <span className={`w-1.5 h-1.5 rounded-full ${isAnthropicConfigured ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-                Claude: {isAnthropicConfigured ? 'Ready (Cloud)' : 'Key Required in .env'}
+                Claude: {isAnthropicConfigured ? 'Ready' : 'Key Req'}
               </span>
             </div>
           </div>
@@ -86,7 +96,9 @@ export function ModelSelector({ selectedModelId, onSelectModel, backendHealth })
           <div className="max-h-80 overflow-y-auto px-1.5 py-1 space-y-1">
             {mockModels.map((model) => {
               const isSelected = model.id === selectedModel.id;
-              const isCloudKeyMissing = model.isCloud && !isAnthropicConfigured;
+              const isKeyMissing = model.providerType === 'gemini'
+                ? !isGeminiConfigured
+                : (model.isCloud && !isAnthropicConfigured);
 
               return (
                 <button
@@ -117,7 +129,7 @@ export function ModelSelector({ selectedModelId, onSelectModel, backendHealth })
                       <span className="font-mono text-[11px] text-outline bg-surface-container px-1.5 py-0.2 rounded">
                         {model.version}
                       </span>
-                      {isCloudKeyMissing && (
+                      {isKeyMissing && (
                         <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.2 rounded-full">
                           <Key className="w-2.5 h-2.5" />
                           Key Required

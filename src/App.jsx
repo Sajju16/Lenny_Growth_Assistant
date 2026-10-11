@@ -127,6 +127,7 @@ export default function App() {
             connected: healthData.status === 'ok' || healthData.backend === 'healthy',
             ollama: healthData.ollama,
             anthropic: healthData.anthropic,
+            gemini: healthData.gemini,
             database: healthData.database,
             activeProvider: healthData.active_provider || healthData.llm_provider || 'ollama',
             activeModel: healthData.active_model,
@@ -503,7 +504,11 @@ export default function App() {
       if (canStream) {
         // --- Live SSE Streaming Path ---
         const assistantMessageId = `asst-${Date.now()}`;
-        const providerBadge = selectedModelObj.providerType === 'anthropic' ? 'Anthropic Cloud' : 'Ollama Local';
+        const providerBadge = selectedModelObj.providerType === 'anthropic'
+          ? 'Anthropic Cloud'
+          : selectedModelObj.providerType === 'gemini'
+          ? 'Gemini Cloud'
+          : 'Ollama Local';
 
         const initialAssistantMessage = {
           id: assistantMessageId,
@@ -606,6 +611,8 @@ export default function App() {
           ? 'Ship 30 for 30 Essay'
           : res.provider === 'anthropic'
           ? 'Anthropic Cloud'
+          : res.provider === 'gemini'
+          ? 'Gemini Cloud'
           : res.provider === 'anthropic-agent'
           ? 'Claude Agent'
           : 'Ollama Local';

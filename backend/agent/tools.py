@@ -74,3 +74,42 @@ def execute_search_transcripts(
             "citations": [],
             "raw_citations_count": 0,
         }
+
+
+def make_sdk_search_tool(
+    retriever: KnowledgeRetriever,
+    citation_collector: Optional[List[Citation]] = None,
+):
+    """
+    Creates an official Claude Agent SDK tool (@claude_agent_sdk.tool)
+    bound to the provided KnowledgeRetriever.
+    """
+    import json
+    from claude_agent_sdk import tool as sdk_tool
+
+    @sdk_tool(
+        name="search_lenny_transcripts",
+        description=(
+            "Search the Lenny's Podcast archives for verified expert growth strategies, "
+            "product frameworks, positioning playbooks, PMF benchmarks, pricing advice, and guest quotes. "
+            "Returns verified excerpts from podcast episodes with guest attributions."
+        ),
+        input_schema=SearchToolInput,
+    )
+    async def search_lenny_transcripts(args: dict) -> dict:
+        query_text = args.get("query", "")
+        top_k = args.get("top_k", 4)
+        result = execute_search_transcripts(retriever, query=query_text, top_k=top_k)
+
+        if citation_collector is not None:
+            for c_dict in result.get("citations", []):
+                citation_obj = Citation(**c_dict)
+                if not any(c.excerpt == citation_obj.excerpt for c in citation_collector):
+                    citation_collector.append(citation_obj)
+
+        return {
+            "content": [{"type": "text", "text": json.dumps(result)}],
+            "is_error": not result.get("has_sufficient_context", True),
+        }
+
+    return search_lenny_transcripts

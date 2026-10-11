@@ -1,8 +1,8 @@
 # Lenny Growth Assistant — Executive Product Intelligence, Essay Skill & Dynamic Artifacts
 
-An executive-tier growth advisory workstation combining high-density product strategy workflows with a **local-first RAG knowledge base** indexed on *Lenny's Podcast* transcripts, **PostgreSQL persistent conversation sessions**, **pluggable Cloud LLM provider switching (Ollama & Anthropic Claude)**, an **autonomous Claude Agent**, a dedicated **"Ship 30 for 30" Essay Skill**, and **Real Dynamic Artifact Generation with a Sandboxed HTML Preview**.
+An executive-tier growth advisory workstation combining high-density product strategy workflows with a **local-first RAG knowledge base** indexed on *Lenny's Podcast* transcripts, **PostgreSQL persistent conversation sessions**, **pluggable Cloud LLM provider switching (Ollama, Anthropic Claude & Google Gemini)**, an **autonomous Claude Agent**, a dedicated **"Ship 30 for 30" Essay Skill**, and **Real Dynamic Artifact Generation with a Sandboxed HTML Preview**.
 
-Powered by **React + Vite**, **FastAPI**, **PostgreSQL**, **Ollama (`qwen2.5:3b`)**, **Anthropic Claude (`claude-3-5-sonnet-20241022`)**, **Claude Agent SDK**, and **ChromaDB**.
+Powered by **React + Vite**, **FastAPI**, **PostgreSQL**, **Ollama (`qwen2.5:3b`)**, **Anthropic Claude (`claude-3-5-sonnet-20241022`)**, **Google Gemini (`gemini-2.5-flash`)**, **Claude Agent SDK**, and **ChromaDB**.
 
 ---
 
@@ -11,10 +11,10 @@ Powered by **React + Vite**, **FastAPI**, **PostgreSQL**, **Ollama (`qwen2.5:3b`
 - **"Ship 30 for 30" Essay Skill (Phase 4):** Dedicated, reusable long-form essay module that generates structured, approximately 1,250-word executive essays. Features an atomic headline, opening hook exposing common startup pitfalls, coherent narrative arc with skimmable H2/H3 headers, bold conceptual emphasis, strict podcast guest attribution, and a concrete "Monday Morning Action Plan". Discloses limitations if evidence is insufficient.
 - **Real Dynamic Artifact Generation (Phase 4):** Full replacement of static mock artifacts with real model-synthesized Markdown and HTML documents. Artifacts are automatically persisted in PostgreSQL (`artifacts` table), linked to conversations, and restored across browser sessions or conversation switches. Normal chat responses never accidentally become artifacts.
 - **Secure Sandboxed HTML Preview (Phase 4):** Model-generated HTML is treated as untrusted input. Rendered exclusively in an isolated `iframe` with `sandbox="allow-popups"` (strictly **no** `allow-scripts`, **no** `allow-same-origin`). Automatically sanitizes `<script>` tags, inline event handlers (`onclick=`, `onerror=`), and `javascript:` URIs. If unsafe markup is detected, displays a security alert banner and defaults to the source code view.
-- **Configurable LLM Providers (Phase 3B):** Clean provider abstraction decoupling generation from FastAPI routing. Seamlessly switch between local offline inference (`OllamaProvider` with `qwen2.5:3b`) and cloud frontier intelligence (`AnthropicProvider` with `claude-3-5-sonnet-20241022`) via `LLM_PROVIDER=ollama|anthropic`.
+- **Configurable LLM Providers (Phase 3B+):** Clean provider abstraction decoupling generation from FastAPI routing. Seamlessly switch between local offline inference (`OllamaProvider` with `qwen2.5:3b`), cloud frontier intelligence (`AnthropicProvider` with `claude-3-5-sonnet-20241022`), and **Google Gemini** (`GeminiProvider` with `gemini-2.5-flash`, free tier — no billing required) via `LLM_PROVIDER=ollama|anthropic|gemini`.
 - **Assignment-Required Agent Layer (Phase 3B):** Autonomous `ClaudeTranscriptAgent` with an explicit, secure `search_lenny_transcripts` tool. Strict tool boundaries prevent arbitrary shell or filesystem access.
 - **PostgreSQL Session Persistence (Phase 3A):** Every conversation session, user prompt, assistant response, verified citation array, and dynamic artifact is persisted in PostgreSQL.
-- **Local Diagnostics:** Real-time `/health` diagnostics monitor FastAPI, PostgreSQL, Ollama runtime, ChromaDB vector store, and Anthropic configuration status.
+- **Local Diagnostics:** Real-time `/health` diagnostics monitor FastAPI, PostgreSQL, Ollama runtime, ChromaDB vector store, Anthropic configuration status, and Gemini configuration status.
 
 ---
 
@@ -144,17 +144,27 @@ OLLAMA_BASE_URL=http://localhost:11434
 DEFAULT_MODEL=qwen2.5:3b
 EMBEDDING_MODEL=nomic-embed-text
 
-# LLM Provider Configuration ('ollama' or 'anthropic')
+# LLM Provider Configuration ('ollama', 'anthropic', or 'gemini')
 LLM_PROVIDER=ollama
 
-# Anthropic Cloud LLM / Claude Agent Configuration (required when LLM_PROVIDER=anthropic)
+# Anthropic Cloud LLM Configuration (required when LLM_PROVIDER=anthropic)
 ANTHROPIC_API_KEY=your_anthropic_api_key_here
 ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
+
+# Google Gemini Cloud LLM Configuration (required when LLM_PROVIDER=gemini)
+# Obtain a free API key from https://aistudio.google.com/apikey (no billing required)
+GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_MODEL=gemini-2.5-flash
 
 # API Server Settings
 PORT=8000
 HOST=127.0.0.1
 ```
+
+> **Note on Provider Authentication:**
+> - **Anthropic REST Provider (`LLM_PROVIDER=anthropic`):** Authenticates via standard `ANTHROPIC_API_KEY`.
+> - **Google Gemini Provider (`LLM_PROVIDER=gemini`):** Authenticates via `GEMINI_API_KEY` from [Google AI Studio](https://aistudio.google.com/apikey). Free tier — no billing or payment method required.
+> - **Claude Agent SDK (`claude-agent-sdk`, `use_agent=True`):** Integrates in-process SDK MCP tools and executes via the Claude Code runtime engine. Live un-mocked agent queries require an authenticated Claude Code session on the host machine (`claude login` / `/login`) in addition to `ANTHROPIC_API_KEY`. Without active runtime credentials, agent requests cleanly return `HTTP 401 Unauthorized`.
 
 ---
 
@@ -164,6 +174,7 @@ HOST=127.0.0.1
 - **PostgreSQL** running on `localhost:5432` with database `lenny_growth_db`.
 - **Ollama** installed with models: `ollama run qwen2.5:3b` and `ollama pull nomic-embed-text`.
 - **Node.js** (v18+) and **Python** (3.11+).
+- *(Optional for Live Claude Agent SDK execution)*: **Claude Code** installed and logged in (`claude login`).
 
 ### 2. Backend Setup
 ```powershell
@@ -188,42 +199,70 @@ npm run dev
 ```
 Visit [http://localhost:3000](http://localhost:3000) in your browser.
 
-### 4. Docker Compose One-Command Full-Stack Startup
-For machines with Docker Desktop installed:
+### 4. Docker Compose Reproducible Startup
+
+The repository includes a multi-container Docker Compose configuration (`docker-compose.yml`) enabling full-stack deployment:
+
 ```powershell
 docker compose up --build
 ```
-This automatically initializes:
-- `postgres`: PostgreSQL 16 on port 5432 with healthchecks and persistent storage.
-- `backend`: FastAPI gateway on port 8000 connected to PostgreSQL and host Ollama (`host.docker.internal:11434`).
-- `frontend`: Compiled production bundle served via Nginx on port 3000 with reverse proxying to `backend`.
+
+#### Services & Architecture:
+- **`postgres` (Port 5432):** PostgreSQL 16 Alpine container storing session conversations, chat messages, and dynamic artifacts.
+  - Health check: `pg_isready -U postgres -d lenny_growth_db` with interval 5s, timeout 3s, retries 5.
+  - Volume: `postgres_data:/var/lib/postgresql/data` ensures data persistence across container rebuilds.
+- **`backend` (Port 8000):** FastAPI application container connected to PostgreSQL and local/cloud LLMs.
+  - Service readiness: Explicitly depends on `postgres` with `condition: service_healthy`.
+  - ChromaDB Volume: Mounted specifically at `/app/data/chroma_db` (`chroma_data:/app/data/chroma_db`) with `CHROMA_DIR=/app/data/chroma_db`. This ensures vector persistence without masking raw source transcripts located at `/app/data/raw_transcripts/`.
+  - Host Ollama Connectivity: Configured with `extra_hosts: ["host.docker.internal:host-gateway"]` and `OLLAMA_BASE_URL=http://host.docker.internal:11434`.
+- **`frontend` (Port 3000):** Production React bundle served via Nginx with dedicated reverse proxy rules.
+  - Depends on `backend` with `condition: service_started`.
+  - **SSE Streaming Optimization:** Nginx routes `/api/chat/stream` with `proxy_buffering off;`, `proxy_cache off;`, `chunked_transfer_encoding on;`, and 600-second read/send timeouts to deliver instant token streaming without proxy buffering delays or gateway timeouts during long generation runs.
+  - Standard REST API routes (`/api/`) are proxied with 120-second timeouts.
+
+#### Fresh-Clone Startup & Knowledge Base Auto-Seeding:
+- **Licensing & Clean Git History:** To respect upstream copyright and avoid committing 33+ MB of third-party podcast text, `backend/data/raw_transcripts/` is gitignored. Attribution and upstream repository details are tracked in `docs/TRANSCRIPTS.md`.
+- **On-Demand Pinned Download:** On a fresh clone, `ensure_transcripts_available()` automatically retrieves and extracts the pinned upstream archive (`be8ab89a890a833cbba2c892178f823fff178c65`) into `backend/data/raw_transcripts/` before indexing.
+- **Automatic Initialization:** On backend startup (`@app.on_event("startup")`), `auto_seed_knowledge_base()` inspects the ChromaDB vector store collection. If empty (`count == 0`), it automatically indexes high-value product, positioning, and growth episodes (April Dunford, Peter Kazanjy, Elena Verna, etc.) into ChromaDB embeddings using `nomic-embed-text`.
+- **Graceful Deferral:** If the local Ollama daemon is offline or still downloading models during container boot, auto-seeding catches connection errors cleanly, logs an actionable notice, and lets FastAPI startup succeed without crashing.
+- **On-Demand Ingestion:** Once Ollama is available, ingestion can be triggered at any time:
+  ```bash
+  # Via API endpoint (e.g. from container or curl)
+  curl -X POST http://localhost:8000/api/rag/ingest -H "Content-Type: application/json" -d '{"limit": 15, "prioritize": true}'
+
+  # Or directly via CLI in backend
+  python -m rag.ingest --limit 15 --prioritize
+  ```
 
 ---
 
 ## 6. Testing & Verification Results
 
-### Automated Test Suite (55 Tests Passing)
+### Automated Test Suite (120 Tests Passing)
 Run the full test suite with `pytest`:
 ```powershell
 $env:PYTHONPATH=".;.venv\Lib\site-packages"; python -m pytest tests/ -v
 ```
 
-All **55 automated tests pass** with zero errors or regressions:
-- **`test_essay_skill.py` (4 tests):** Markdown title extraction, direct essay generation with citations, insufficient evidence handling, `/api/skills/essay` endpoint execution and conversation persistence.
-- **`test_artifacts.py` (8 tests):** Safe HTML document wrapping, `<script>` removal, inline event handler neutralization (`onclick=`), `javascript:` URI neutralization, Markdown artifact creation API, HTML artifact creation API, non-artifact chat guarantee, explicit artifact chat creation.
+All **120 automated tests pass** with zero errors or regressions:
+- **`test_startup_and_seed.py` (8 tests):** Validates raw transcript directory presence and parseability, auto-seed trigger when ChromaDB is empty, skip when already populated, graceful deferral when Ollama is unreachable, `/api/rag/ingest` endpoint behavior, gitignore exclusion verification, and mocked tarball archive extraction.
+- **`test_streaming_and_latency.py` (19 tests):** Validates SSE token streaming, query embedding cache, tokens-per-second excluding TTFT, conversation history truncation, and streaming retrieval.
+- **`test_timeouts.py` (6 tests):** Dedicated timeouts, artifact retry deduplication, message deduplication.
+- **`test_essay_skill.py` (4 tests):** Headline extraction, 1,250-word calibration prompts, repetition penalty propagation, insufficient evidence disclosure, persistence.
+- **`test_artifacts.py` (8 tests):** Safe HTML document wrapping, `<script>` removal, inline event handler neutralization (`onclick=`), `javascript:` URI neutralization, Markdown and HTML artifact APIs, non-artifact chat guarantee.
 - **`test_providers.py` (8 tests):** Provider factory resolution (`ollama` vs `anthropic`), key validation, missing/placeholder key HTTP 400 error handling, health reporting, mocked Anthropic Claude generation, prevention of silent fallbacks.
-- **`test_agent.py` (5 tests):** `search_lenny_transcripts` tool schema, tool execution against knowledge retriever, multi-turn tool invocation and synthesis loop, `/api/chat` agent mode.
-- **`test_provider_persistence.py` (1 test):** Session isolation, cloud provider message persistence, structured JSON citation storage.
-- **`test_database.py` (6 tests):** Conversation CRUD, cascade message deletion, citation serialization, session isolation.
+- **`test_agent.py` (5 tests):** Claude Agent SDK integration, tool schema, execution against knowledge retriever, multi-turn synthesis loop.
+- **`test_model_selection.py` (5 tests):** Dynamic model switching across `qwen2.5:1.5b` and `qwen2.5:3b`.
+- **`test_database.py` (6 tests):** Deterministic secondary ordering, conversation CRUD, cascade message deletion, citation serialization.
 - **`test_conversations_api.py` (6 tests):** Conversation REST endpoints.
 - **`test_postgres_real.py` (1 test):** Live PostgreSQL integration.
-- **`test_parser.py`, `test_chunker.py`, `test_retriever.py`, `test_api.py` (16 tests):** Frontmatter parsing, chunking, semantic retrieval, citations, health checks.
+- **`test_parser.py`, `test_chunker.py`, `test_retriever.py`, `test_api.py` (34 tests):** Frontmatter parsing, chunking, semantic retrieval, citations, health checks.
 
 ### Production Build Verification
 ```powershell
 npm run build
 ```
-Vite production build compiles cleanly: 1599 modules transformed in 4.88s with zero warnings or errors.
+Vite production build compiles cleanly: 1599 modules transformed in ~4.8s with zero warnings or errors.
 
 ---
 
@@ -233,6 +272,7 @@ Vite production build compiles cleanly: 1599 modules transformed in 4.88s with z
 |---|---|---|
 | **Ollama connection failed (`ConnectError`)** | Ollama is not running on localhost. | Start Ollama: `ollama run qwen2.5:3b`. Verify at `http://localhost:11434/api/tags`. |
 | **Anthropic HTTP 400 Bad Request** | `ANTHROPIC_API_KEY` is missing or a placeholder. | Set your valid `sk-ant-...` key in `.env`, or switch to local Ollama with `LLM_PROVIDER=ollama`. |
+| **Claude Agent HTTP 401 Unauthorized** | Claude Code runtime not logged in or invalid credentials. | Run `claude login` or ensure host environment has authenticated Claude Code credentials. |
 | **PostgreSQL connection refused** | Database server is stopped or database is not created. | Run `psql -U postgres -c "CREATE DATABASE lenny_growth_db;"` and verify port 5432. |
 | **Docker backend cannot reach host Ollama** | Container networking on Windows. | Ensure `OLLAMA_BASE_URL=http://host.docker.internal:11434` and `extra_hosts: ["host.docker.internal:host-gateway"]` in `docker-compose.yml`. |
 | **Windows PowerShell venv script execution error** | Execution policy restriction. | Run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` before activating `.venv`. |

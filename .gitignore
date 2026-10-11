@@ -19,8 +19,10 @@ __pycache__/
 backend/.pytest_cache/
 
 # Local databases, vectors & raw transcript data
-backend/data/
+backend/data/raw_transcripts/
+backend/data/chroma_db/
 backend/chroma_db/
+chroma_db/
 *.sqlite
 *.sqlite3
 *.db

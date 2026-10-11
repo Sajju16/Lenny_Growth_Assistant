@@ -3,7 +3,7 @@ import re
 import json
 import time
 import logging
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, status, BackgroundTasks, Depends
 from fastapi.responses import StreamingResponse
@@ -36,6 +36,8 @@ from llm import (
     OllamaProvider,
     AnthropicProvider,
     is_valid_anthropic_key,
+    GeminiProvider,
+    is_valid_gemini_key,
     GROUNDED_SYSTEM_PROMPT,
 )
 from agent import ClaudeTranscriptAgent
@@ -106,6 +108,50 @@ vector_store = VectorStore()
 retriever = KnowledgeRetriever(vector_store=vector_store)
 
 
+def auto_seed_knowledge_base(limit: int = 15) -> Dict[str, Any]:
+    """
+    Checks if ChromaDB vector store contains indexed transcript chunks.
+    If empty (count == 0), automatically ingests priority episodes from the
+    project's actual raw_transcripts repository source.
+    """
+    from rag.ingest import run_ingestion, DEFAULT_TRANSCRIPTS_DIR
+    try:
+        current_count = vector_store.collection.count()
+        if current_count > 0:
+            logger.info("ChromaDB vector store initialized with %d indexed chunks.", current_count)
+            return {"status": "already_seeded", "total_chunks": current_count}
+
+        if not DEFAULT_TRANSCRIPTS_DIR.exists():
+            logger.warning(
+                "Knowledge base is empty, but raw transcripts directory not found at: %s",
+                DEFAULT_TRANSCRIPTS_DIR,
+            )
+            return {
+                "status": "missing_transcripts_dir",
+                "total_chunks": 0,
+                "path": str(DEFAULT_TRANSCRIPTS_DIR),
+            }
+
+        logger.info(
+            "Knowledge base is empty. Auto-seeding baseline priority transcripts from %s...",
+            DEFAULT_TRANSCRIPTS_DIR,
+        )
+        ingest_stats = run_ingestion(transcripts_dir=DEFAULT_TRANSCRIPTS_DIR, limit=limit, prioritize=True)
+        new_count = vector_store.collection.count()
+        logger.info("Auto-seeding completed. Total indexed chunks: %d", new_count)
+        return {
+            "status": "seeded",
+            "total_chunks": new_count,
+            "ingest_stats": ingest_stats,
+        }
+    except Exception as exc:
+        logger.warning(
+            "Auto-seeding deferred: %s. Run 'python -m rag.ingest' once Ollama is online, or POST /api/knowledge/ingest.",
+            exc,
+        )
+        return {"status": "error", "error": str(exc), "total_chunks": 0}
+
+
 @app.on_event("startup")
 def on_startup():
     try:
@@ -113,6 +159,12 @@ def on_startup():
         logger.info("Database schemas initialized.")
     except Exception as exc:
         logger.error("Startup database initialization warning: %s", exc)
+
+    try:
+        auto_seed_knowledge_base()
+    except Exception as exc:
+        logger.warning("Knowledge base startup check warning: %s", exc)
+
 
 
 class ChatMessageItem(BaseModel):
@@ -126,7 +178,7 @@ class ChatRequest(BaseModel):
     history: Optional[List[ChatMessageItem]] = Field(default_factory=list, description="Prior conversation messages")
     use_rag: Optional[bool] = Field(default=True, description="Enable local transcript retrieval grounding")
     conversation_id: Optional[str] = Field(default=None, description="Optional active conversation/session ID")
-    provider: Optional[str] = Field(default=None, description="LLM provider: 'ollama' or 'anthropic'")
+    provider: Optional[str] = Field(default=None, description="LLM provider: 'ollama', 'anthropic', or 'gemini'")
     use_agent: Optional[bool] = Field(default=False, description="Enable Claude autonomous agent mode with tool execution")
     skill: Optional[str] = Field(default=None, description="Optional skill execution ('essay' or 'ship30')")
     create_artifact: Optional[bool] = Field(default=False, description="Explicitly generate a dynamic artifact")
@@ -152,7 +204,7 @@ class ChatResponse(BaseModel):
 class EssayRequest(BaseModel):
     topic: str = Field(..., min_length=2, description="Essay topic or growth strategy theme")
     conversation_id: Optional[str] = Field(default=None, description="Optional active conversation session ID")
-    provider: Optional[str] = Field(default=None, description="LLM provider: 'ollama' or 'anthropic'")
+    provider: Optional[str] = Field(default=None, description="LLM provider: 'ollama', 'anthropic', or 'gemini'")
     model: Optional[str] = Field(default=None, description="Optional model override")
 
 
@@ -213,6 +265,10 @@ async def health_check():
     anthropic_provider = AnthropicProvider()
     anthropic_status = await anthropic_provider.check_health()
 
+    # Gemini Cloud Provider health check
+    gemini_provider = GeminiProvider()
+    gemini_status = await gemini_provider.check_health()
+
     kb_stats = vector_store.get_stats()
     db_stats = check_db_health()
 
@@ -220,6 +276,9 @@ async def health_check():
     if configured_provider == "anthropic":
         active_model = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
         active_provider_ok = anthropic_status.get("connected", False)
+    elif configured_provider == "gemini":
+        active_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        active_provider_ok = gemini_status.get("connected", False)
     else:
         active_model = DEFAULT_MODEL
         active_provider_ok = ollama_status["connected"]
@@ -243,8 +302,9 @@ async def health_check():
         "database": db_stats,
         "ollama": ollama_status,
         "anthropic": anthropic_status,
+        "gemini": gemini_status,
         "knowledge_base": kb_stats,
-        "available_providers": ["ollama", "anthropic"],
+        "available_providers": ["ollama", "anthropic", "gemini"],
     }
 
 
@@ -452,6 +512,7 @@ async def update_conversation_endpoint(
             detail=f"Conversation '{conversation_id}' not found.",
         )
     msg_count = len(conv.messages) if conv.messages else 0
+    last_msg = crud.get_last_message(db, conversation_id)
     return {
         "id": conv.id,
         "title": conv.title,
@@ -460,7 +521,7 @@ async def update_conversation_endpoint(
         "created_at": conv.created_at.isoformat() if conv.created_at else None,
         "updated_at": conv.updated_at.isoformat() if conv.updated_at else None,
         "message_count": msg_count,
-        "last_message": conv.messages[-1].content[:80] if conv.messages else None,
+        "last_message": last_msg.content[:80] if last_msg else None,
     }
 
 
@@ -494,17 +555,24 @@ async def knowledge_status():
     return stats
 
 
+class IngestionRequest(BaseModel):
+    limit: Optional[int] = Field(default=10, description="Maximum number of transcript files to process")
+    prioritize: Optional[bool] = Field(default=True, description="Prioritize high-value growth & positioning episodes")
+
+
 @app.post("/api/knowledge/ingest")
-async def trigger_ingestion(request: IngestionRequest, background_tasks: BackgroundTasks):
+@app.post("/api/rag/ingest")
+async def trigger_ingestion(request: Optional[IngestionRequest] = None):
     """
     Triggers local transcript ingestion safely.
     """
-    limit = request.limit or 10
+    limit = request.limit if (request and request.limit is not None) else 10
+    prioritize = request.prioritize if (request and request.prioritize is not None) else True
     try:
-        res = run_ingestion(limit=limit)
+        res = run_ingestion(limit=limit, prioritize=prioritize)
         return {
             "status": "success",
-            "message": f"Successfully ingested {res['processed_files']} episodes ({res['total_chunks_indexed']} chunks).",
+            "message": f"Successfully ingested {res.get('processed_files', 0)} episodes ({res.get('total_chunks_indexed', 0)} chunks).",
             "details": res,
         }
     except Exception as exc:

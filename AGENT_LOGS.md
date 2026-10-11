@@ -32,6 +32,12 @@ Phase 5: Assignment Compliance Audit, Dockerization & Baseline Test Suite
    │
    ▼
 Phase 6: Streaming Latency Profiling, Native Ollama Metrics & History Truncation
+   │
+   ▼
+Phase 7: Deterministic Message Ordering & Fresh-Clone Auto-Seeding Fallback
+   │
+   ▼
+Phase 8: Google Gemini Cloud Provider Integration & Zero-Cost Live Verification
 ```
 
 ---
@@ -113,7 +119,23 @@ Phase 6: Streaming Latency Profiling, Native Ollama Metrics & History Truncation
   - *Retrieval Context Bounding:* Bounded retrieval for normal chat queries to top-2 chunks (`top_k=2`), preserving verified guest citations while keeping prompt overhead bounded.
   - *In-Memory Embedding Caching:* Caches repeated query embeddings in `OllamaEmbeddingClient` (0ms retrieval overhead on repeated queries).
   - *Automated Benchmark Script:* Created `backend/measure_stream.py` to benchmark streaming TTFT, total duration, actual TPS, word count, and model load status across repeated runs.
-  - *Test Suite Expansion:* Added 50 new automated tests covering history truncation, streaming SSE events, native Ollama metrics extraction, model selection overrides, and timeout edge cases, expanding the automated suite from 55 to **105 passing tests**.
+  - *Test Suite Expansion:* Added 50 new automated tests covering history truncation, streaming SSE events, native Ollama metrics extraction, model selection overrides, and timeout edge cases, expanding the automated suite from 55 to 105 passing tests.
+
+### Phase 7: Deterministic Message Ordering & Fresh-Clone Auto-Seeding
+- **Objective:** Eliminate SQLite timestamp tie flaky test failures and ensure clean, reproducible fresh-clone startup without committed transcript copyright issues.
+- **Key Actions:**
+  - *Deterministic Secondary Key:* Added `Message.id.asc()` as secondary sort key after `Message.created_at.asc()` in `backend/database/crud.py:get_conversation()`, guaranteeing identical ordering when multiple messages share identical millisecond timestamps.
+  - *Fresh-Clone Fallback:* Implemented `ensure_transcripts_available()` in `backend/rag/ingest.py`, automatically downloading and extracting pinned upstream transcript archives (`ChatPRD/lennys-podcast-transcripts`) if local files are absent.
+  - *Automated Startup Tests:* Added `backend/tests/test_startup_and_seed.py` with 8 tests covering auto-seeding, directory presence, offline Ollama resilience, and archive extraction mocking.
+
+### Phase 8: Google Gemini Cloud Provider & Zero-Cost Live Verification
+- **Objective:** Add Google Gemini as a zero-cost cloud LLM option accessible via Google AI Studio free tier without requiring paid credits or credit cards.
+- **Key Actions:**
+  - *Gemini Provider:* Implemented `GeminiProvider` (`backend/llm/gemini_provider.py`) using `httpx` and Google Generative Language REST API (`gemini-2.5-flash`), supporting single-turn generation and true SSE streaming.
+  - *Health & Factory Integration:* Updated `backend/llm/factory.py`, `backend/main.py` `/health`, and Pydantic schemas to validate and route `gemini` requests.
+  - *Frontend Model Selector:* Integrated Gemini into `mockModels.js`, `ModelSelector.jsx`, and `App.jsx` with dynamic provider badges and health indicators.
+  - *Live Verification Command:* Built `backend/verify_gemini_live.py` with secret scrubbing and billing-protection guards. Verified live with `gemini-2.5-flash` (received "Gemini live test OK" with 19 input / 5 output tokens, 0 billing required).
+  - *Test Suite Expansion:* Added 32 unit tests in `backend/tests/test_gemini_provider.py`, bringing the automated test suite to **152 passing tests**.
 
 ---
 

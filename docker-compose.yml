@@ -15,7 +15,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d lenny_growth_db"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-lenny_growth_db}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -36,6 +36,7 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-3-5-sonnet-20241022}
+      CHROMA_DIR: /app/data/chroma_db
       PORT: 8000
       HOST: 0.0.0.0
     extra_hosts:
@@ -43,7 +44,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - chroma_data:/app/data
+      - chroma_data:/app/data/chroma_db
     depends_on:
       postgres:
         condition: service_healthy

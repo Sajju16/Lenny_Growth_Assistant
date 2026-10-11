@@ -2,10 +2,21 @@ import uuid
 from typing import List, Optional
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, asc, case
 
 from database.models import Conversation, Message, Artifact
 from database.schemas import ConversationCreate, ConversationUpdate, MessageCreate, ArtifactCreate
+
+
+
+# Deterministic secondary chronological ordering when created_at timestamps tie:
+# In conversation turns, system prompt (0) comes first, user prompt (1) comes second,
+# and assistant response (2) comes last.
+MESSAGE_ROLE_ORDER = case(
+    (Message.role == "assistant", 2),
+    (Message.role == "user", 1),
+    else_=0,
+)
 
 
 def get_conversation(db: Session, conversation_id: str) -> Optional[Conversation]:
@@ -26,7 +37,7 @@ def list_conversations(db: Session, limit: int = 50, offset: int = 0) -> List[di
         last_msg = (
             db.query(Message)
             .filter(Message.conversation_id == conv.id)
-            .order_by(desc(Message.created_at))
+            .order_by(desc(Message.created_at), desc(MESSAGE_ROLE_ORDER), desc(Message.id))
             .first()
         )
         msg_count = (
@@ -141,7 +152,7 @@ def get_conversation_messages(db: Session, conversation_id: str) -> List[Message
     return (
         db.query(Message)
         .filter(Message.conversation_id == conversation_id)
-        .order_by(Message.created_at.asc())
+        .order_by(asc(Message.created_at), asc(MESSAGE_ROLE_ORDER), asc(Message.id))
         .all()
     )
 
@@ -219,7 +230,7 @@ def get_last_message(db: Session, conversation_id: str) -> Optional[Message]:
     return (
         db.query(Message)
         .filter(Message.conversation_id == conversation_id)
-        .order_by(desc(Message.created_at))
+        .order_by(desc(Message.created_at), desc(MESSAGE_ROLE_ORDER), desc(Message.id))
         .first()
     )
 

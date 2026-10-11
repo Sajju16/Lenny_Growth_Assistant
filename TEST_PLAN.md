@@ -1,8 +1,8 @@
 # Quality Assurance & Verification Test Plan
 
-**Document Version:** 1.1.0
+**Document Version:** 1.2.0
 **Application:** Lenny Growth Assistant — Executive Product Intelligence Workstation
-**Test Suite Status:** 105 Passed, 0 Failed
+**Test Suite Status:** 152 Passed, 0 Failed
 
 ---
 
@@ -16,9 +16,9 @@ The automated test suite runs via `pytest` inside the Python virtual environment
 $env:PYTHONPATH=".;.venv\Lib\site-packages"; python -m pytest backend/tests/ -v
 ```
 
-### 1.2 Breakdown of Automated Tests (105 Tests Total)
+### 1.2 Breakdown of Automated Tests (152 Tests Total)
 
-The test suite expanded from the baseline 55 tests to **105 passing tests** to validate streaming SSE, latency profiling, bounded timeouts, model selection, citation grounding, and conversation-history truncation:
+The test suite expanded to **152 passing tests** to validate streaming SSE, latency profiling, bounded timeouts, model selection, citation grounding, conversation-history truncation, deterministic message ordering, startup auto-seeding fallbacks, and the Google Gemini provider:
 
 - **`test_streaming_and_latency.py` (19 passing tests / test cases):**
   - `test_query_embedding_cache`: Verifies in-memory caching of query embeddings in `OllamaEmbeddingClient` (0ms cache hits).
@@ -102,7 +102,28 @@ The test suite expanded from the baseline 55 tests to **105 passing tests** to v
   - Tests `search_lenny_transcripts` schema, execution boundaries, multi-turn reasoning loop, missing key handling, and `/api/chat` agent mode.
 
 - **`test_database.py` (6 passing tests):**
-  - Verifies conversation CRUD, foreign key cascading, citation serialization, session isolation.
+  - Verifies conversation CRUD, foreign key cascading, citation serialization, session isolation, and deterministic secondary ordering key (`id` tie-breaker) for messages with identical timestamps.
+
+- **`test_gemini_provider.py` (32 passing tests):**
+  - Verifies API key validation (empty, whitespace, placeholders, `your_` prefix, valid keys).
+  - Tests provider factory resolution for `gemini` and `LLM_PROVIDER=gemini`.
+  - Validates provider properties (`gemini`, `is_cloud=True`, default model `gemini-2.5-flash`).
+  - Tests strict API key enforcement (missing/placeholder keys raise HTTP 400).
+  - Validates health check reporting (unconfigured vs. configured).
+  - Tests `generate_response` with mocked HTTP responses (success, 401 auth error, 429 rate limit, 402 billing detection, 502 bad gateway, and insufficient evidence refusal).
+  - Tests `stream_response` SSE streaming and insufficient evidence early refusal.
+  - Tests Gemini content structure and conversation history role mapping (`user`/`model`).
+  - Tests `/api/chat` endpoint routing and error handling with Gemini provider.
+
+- **`test_startup_and_seed.py` (8 passing tests):**
+  - Verifies raw transcript source directory structure and parseable Markdown episodes.
+  - Validates `auto_seed_knowledge_base` idempotent skipping when collection is already populated.
+  - Tests auto-seeding triggering ingestion when collection is empty.
+  - Tests graceful error handling when Ollama is unreachable at startup.
+  - Verifies safe handling when transcript directory is missing.
+  - Tests `/api/rag/ingest` and `/api/rag/stats` endpoints.
+  - Tests fresh-clone transcript availability check.
+  - Verifies pinned archive download and extraction fallback in `ensure_transcripts_available`.
 
 - **`test_conversations_api.py` (5 passing tests):**
   - Tests `/api/conversations` endpoints (create, list, get, update, delete).
@@ -131,11 +152,13 @@ Confirms clean compilation with zero linting, JSX, or bundling errors (`1,599 mo
 
 | Verification Level | Scope | Environment Status |
 |---|---|---|
-| **Automated Tests (105 Tests)** | Backend unit, integration, and security tests using `pytest` and `fastapi.testclient.TestClient`. | **100% Passing** in local virtual environment. |
+| **Automated Tests (152 Tests)** | Backend unit, integration, and security tests using `pytest` and `fastapi.testclient.TestClient`. | **100% Passing (152/152)** in local virtual environment. |
 | **Live Local Integrations** | Real PostgreSQL (`lenny_growth_db` on port 5432) and real local Ollama runtime (`qwen2.5:3b`, `nomic-embed-text` on port 11434). | **Verified Live**; verified via benchmark script and `/health` diagnostics. |
-| **Mocked / Offline Integrations** | Anthropic Claude API (`claude-3-5-sonnet`) and Claude Agent SDK. | **Verified via Mock Tests**; live execution requires external user API key in `backend/.env`. |
+| **Live Google Gemini Cloud Integration** | Real Google AI Studio endpoint (`generativelanguage.googleapis.com`) using `gemini-2.5-flash` on the free tier. | **Verified Live** via `backend/verify_gemini_live.py` (received live response "Gemini live test OK", 19 input / 5 output tokens, 0 billing required). |
+| **Mocked / Offline Integrations** | Anthropic Claude API (`claude-3-5-sonnet`) and Claude Agent SDK. | **Verified via Mock Tests (32+ tests)**; live execution requires external user API key in `backend/.env`. |
+| **Claude Agent SDK Live Execution** | In-process agent execution via Claude Code runtime. | **Partially Verified (Unit Tests Pass)**; un-mocked live agent queries require authenticated host session (`claude login`). Returns clean HTTP 401 without credentials. |
 | **Dockerized Integration** | Multi-container Docker Compose launch (`docker compose up --build`). | **Configured & Validated Syntactically**; host Windows machine lacks active Docker Desktop daemon. |
-| **Manual UI Workflows** | 3-panel layout, citation card rendering, mode chips, and live SSE token streaming. | **Verified in Local Browser** on `http://localhost:3000`. |
+| **Manual UI Workflows** | 3-panel layout, citation card rendering, mode chips, ModelSelector provider toggling, and live SSE token streaming. | **Verified in Local Browser** on `http://localhost:3000`. |
 
 ---
 

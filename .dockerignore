@@ -1,0 +1,17 @@
+node_modules/
+dist/
+build/
+backend/.venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+backend/.pytest_cache/
+.env
+.env.*
+postgres_data/
+backend/data/chroma_db/
+backend/chroma_db/
+*.db
+*.sqlite
+*.sqlite3
