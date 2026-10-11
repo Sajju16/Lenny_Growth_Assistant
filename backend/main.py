@@ -8,7 +8,7 @@ from datetime import datetime
 from fastapi import FastAPI, HTTPException, status, BackgroundTasks, Depends
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 import httpx
 from sqlalchemy.orm import Session
 
@@ -43,6 +43,12 @@ from llm import (
 from agent import ClaudeTranscriptAgent
 from artifacts import validate_and_sanitize_html
 from skills import generate_ship30_essay, extract_title_from_markdown
+from dotenv import load_dotenv
+
+# Ensure local backend/.env is loaded without overriding existing test-suite patches
+_backend_env = os.path.join(os.path.dirname(__file__), ".env")
+if os.path.exists(_backend_env):
+    load_dotenv(_backend_env, override=False)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("lenny-growth-backend")
@@ -184,6 +190,23 @@ class ChatRequest(BaseModel):
     create_artifact: Optional[bool] = Field(default=False, description="Explicitly generate a dynamic artifact")
     artifact_type: Optional[str] = Field(default="markdown", pattern="^(markdown|html)$", description="Type of artifact: 'markdown' or 'html'")
     artifact_title: Optional[str] = Field(default=None, description="Custom title for generated artifact")
+
+    @field_validator("history", mode="before")
+    @classmethod
+    def filter_empty_history(cls, v):
+        if not isinstance(v, list):
+            return v
+        cleaned = []
+        for item in v:
+            if isinstance(item, dict):
+                content = str(item.get("content", "") or "").strip()
+                if content:
+                    cleaned.append(item)
+            elif hasattr(item, "content"):
+                content = str(getattr(item, "content", "") or "").strip()
+                if content:
+                    cleaned.append(item)
+        return cleaned
 
 
 class ChatResponse(BaseModel):
@@ -698,9 +721,16 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
     # 3. Agent Execution Path
     if request.use_agent:
         agent = ClaudeTranscriptAgent(retriever=retriever, model_name=target_model)
+        agent_history = [
+            item.model_dump() if hasattr(item, "model_dump") else item.dict()
+            for item in (request.history or [])
+            if (getattr(item, "content", "") or "").strip()
+        ]
+        if agent_history and agent_history[-1].get("role") == "user" and agent_history[-1].get("content", "").strip() == request.message.strip():
+            agent_history = agent_history[:-1]
         agent_res = await agent.run(
             prompt=request.message,
-            history=[item.dict() for item in (request.history or [])],
+            history=agent_history,
         )
 
         artifact_id = None
@@ -816,7 +846,13 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
     # Invoke selected provider with sensible token bound for normal chat.
     # Truncate history to the latest _HISTORY_MAX_MESSAGES items so that long
     # sessions do not balloon prompt-eval time.
-    raw_history = [item.dict() for item in (request.history or [])]
+    raw_history = [
+        item.model_dump() if hasattr(item, "model_dump") else item.dict()
+        for item in (request.history or [])
+        if (getattr(item, "content", "") or "").strip()
+    ]
+    if raw_history and raw_history[-1].get("role") == "user" and raw_history[-1].get("content", "").strip() == request.message.strip():
+        raw_history = raw_history[:-1]
     bounded_history = _truncate_history(raw_history)
     t0_llm = time.perf_counter()
     response_obj = await llm_provider.generate_response(
@@ -1015,7 +1051,13 @@ async def chat_stream_endpoint(request: ChatRequest, db: Session = Depends(get_d
 
         # Truncate history to the latest _HISTORY_MAX_MESSAGES items so that
         # long sessions do not balloon prompt-eval time during streaming.
-        raw_history_stream = [item.dict() for item in (request.history or [])]
+        raw_history_stream = [
+            item.model_dump() if hasattr(item, "model_dump") else item.dict()
+            for item in (request.history or [])
+            if (getattr(item, "content", "") or "").strip()
+        ]
+        if raw_history_stream and raw_history_stream[-1].get("role") == "user" and raw_history_stream[-1].get("content", "").strip() == request.message.strip():
+            raw_history_stream = raw_history_stream[:-1]
         bounded_history_stream = _truncate_history(raw_history_stream)
 
         try:

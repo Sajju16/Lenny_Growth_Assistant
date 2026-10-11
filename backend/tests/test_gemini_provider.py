@@ -233,8 +233,10 @@ class TestGeminiGenerate:
         mock_resp = MagicMock()
         mock_resp.status_code = 429
         mock_resp.text = "Resource exhausted"
+        mock_resp.headers = {}
 
-        with patch("llm.gemini_provider.httpx.AsyncClient") as mock_client_cls:
+        with patch("llm.gemini_provider.httpx.AsyncClient") as mock_client_cls, \
+             patch("llm.gemini_provider.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             mock_client = MagicMock()
             mock_client.post = AsyncMock(return_value=mock_resp)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -247,6 +249,69 @@ class TestGeminiGenerate:
                     history=[],
                 )
             assert exc_info.value.status_code == 429
+            assert mock_sleep.call_count == 3
+
+    @pytest.mark.anyio
+    async def test_503_retries_and_succeeds(self):
+        provider = GeminiProvider(api_key="AIzaSyB-test-key", model_name="gemini-2.5-flash")
+
+        mock_resp_503 = MagicMock()
+        mock_resp_503.status_code = 503
+        mock_resp_503.text = "This model is currently experiencing high demand."
+        mock_resp_503.headers = {"Retry-After": "2"}
+
+        mock_resp_200 = MagicMock()
+        mock_resp_200.status_code = 200
+        mock_resp_200.text = json.dumps({
+            "candidates": [{
+                "content": {"parts": [{"text": "Success after retry."}]},
+                "finishReason": "STOP",
+            }],
+            "usageMetadata": {"candidatesTokenCount": 10, "promptTokenCount": 20},
+        })
+        mock_resp_200.json.return_value = json.loads(mock_resp_200.text)
+        mock_resp_200.headers = {}
+
+        with patch("llm.gemini_provider.httpx.AsyncClient") as mock_client_cls, \
+             patch("llm.gemini_provider.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            mock_client = MagicMock()
+            mock_client.post = AsyncMock(side_effect=[mock_resp_503, mock_resp_200])
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            result = await provider.generate_response(
+                prompt="test prompt",
+                history=[],
+            )
+            assert result.content == "Success after retry."
+            assert mock_sleep.call_count == 1
+
+    @pytest.mark.anyio
+    async def test_503_retries_exhausted_raises_503(self):
+        provider = GeminiProvider(api_key="AIzaSyB-test-key", model_name="gemini-2.5-flash")
+
+        mock_resp_503 = MagicMock()
+        mock_resp_503.status_code = 503
+        mock_resp_503.text = "This model is currently experiencing high demand. Spikes in demand are usually temporary."
+        mock_resp_503.headers = {}
+
+        with patch("llm.gemini_provider.httpx.AsyncClient") as mock_client_cls, \
+             patch("llm.gemini_provider.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            mock_client = MagicMock()
+            mock_client.post = AsyncMock(return_value=mock_resp_503)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(HTTPException) as exc_info:
+                await provider.generate_response(
+                    prompt="test prompt",
+                    history=[],
+                )
+            assert exc_info.value.status_code == 503
+            assert "high demand" in exc_info.value.detail.lower() or "503" in exc_info.value.detail
+            assert mock_sleep.call_count == 3
 
     @pytest.mark.anyio
     async def test_billing_error_detection(self):

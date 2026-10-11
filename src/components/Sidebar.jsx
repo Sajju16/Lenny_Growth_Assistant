@@ -14,7 +14,7 @@ import {
 import { BrandLogo } from './BrandLogo';
 
 export function Sidebar({
-  conversations,
+  conversations = [],
   activeConversationId,
   onSelectConversation,
   onNewChat,
@@ -23,6 +23,7 @@ export function Sidebar({
   onCloseMobile,
   isCollapsedDesktop,
   onToggleCollapseDesktop,
+  isInitialHydrating = false,
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'saved-insights' | 'knowledge-base'
@@ -157,7 +158,17 @@ export function Sidebar({
 
       {/* Scrollable Conversation Stream */}
       <div className="flex-1 overflow-y-auto px-space-sm pt-space-md space-y-space-md">
-        {groups.map((group) => {
+        {isInitialHydrating ? (
+          <div className="px-space-md space-y-3 pt-1">
+            <div className="h-3 w-16 bg-[#EAEAE7] animate-pulse rounded" />
+            <div className="space-y-2">
+              <div className="h-8 w-full bg-[#EAEAE7]/70 animate-pulse rounded-lg" />
+              <div className="h-8 w-4/5 bg-[#EAEAE7]/50 animate-pulse rounded-lg" />
+              <div className="h-8 w-3/4 bg-[#EAEAE7]/40 animate-pulse rounded-lg" />
+            </div>
+          </div>
+        ) : (
+          groups.map((group) => {
           const items = grouped[group];
           if (!items || items.length === 0) return null;
           return (
@@ -210,7 +221,7 @@ export function Sidebar({
               </div>
             </div>
           );
-        })}
+        }))}
 
         {filteredConversations.length === 0 && (
           <div className="text-center py-6 px-4 text-outline text-[13px]">

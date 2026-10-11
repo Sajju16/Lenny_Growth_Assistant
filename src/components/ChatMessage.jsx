@@ -212,11 +212,26 @@ export function ChatMessage({ message, onOpenArtifact, onRetry }) {
                 <AlertTriangle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
                 <div className="space-y-1">
                   <h4 className="font-semibold text-[14px] text-red-900">
-                    {message.isTimeout ? 'Local Inference Timeout (Bounded Wait Reached)' : 'Ollama Backend Request Failed'}
+                    {message.isTimeout
+                      ? 'Local Inference Timeout (Bounded Wait Reached)'
+                      : message.isGeminiUnavailable
+                      ? 'Google Gemini Free-Tier High Demand (HTTP 503)'
+                      : 'Inference Request Failed'}
                   </h4>
                   <p className="text-[13.5px] leading-relaxed text-red-700 whitespace-pre-wrap">
                     {message.content}
                   </p>
+                  {message.isGeminiUnavailable && (
+                    <div className="mt-2 p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-[12.5px] space-y-1">
+                      <div className="font-semibold flex items-center gap-1.5 text-amber-800">
+                        <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                        Temporary Google AI Studio Demand Surge
+                      </div>
+                      <p className="text-amber-700 leading-relaxed">
+                        Google's free-tier Gemini endpoints periodically experience brief traffic spikes. Your essay topic and conversation context are preserved. Click <strong>{message.isEssay ? 'Retry Essay Generation' : 'Retry Request'}</strong> below to re-submit.
+                      </p>
+                    </div>
+                  )}
                   {message.isTimeout && (
                     <div className="mt-2 p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-[12.5px] space-y-1">
                       <div className="font-semibold flex items-center gap-1.5 text-amber-800">
@@ -239,13 +254,15 @@ export function ChatMessage({ message, onOpenArtifact, onRetry }) {
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 text-white text-[12.5px] font-medium hover:bg-red-700 transition-colors shadow-sm"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
-                    <span>{message.isTimeout ? 'Retry Generation' : 'Retry Query'}</span>
+                    <span>{message.isEssay ? 'Retry Essay Generation' : message.isTimeout ? 'Retry Generation' : 'Retry Request'}</span>
                   </button>
                 )}
                 <span className="text-[12px] text-red-600">
-                  {message.isTimeout
+                  {message.isEssay
+                    ? 'Retrying preserves your topic and RAG evidence.'
+                    : message.isTimeout
                     ? 'Retrying will not create duplicate messages in database.'
-                    : 'Ensure FastAPI (`http://localhost:8000`) and Ollama are active.'}
+                    : 'Ensure FastAPI and LLM provider are active.'}
                 </span>
               </div>
             </div>

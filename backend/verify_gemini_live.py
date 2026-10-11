@@ -20,7 +20,7 @@ else:
 async def verify_live_gemini():
     from llm.gemini_provider import GeminiProvider, is_valid_gemini_key
 
-    if not is_valid_gemini_key():
+    if not is_valid_gemini_key(os.getenv("GEMINI_API_KEY")):
         print("[STATUS] GEMINI_API_KEY is not configured (or is a placeholder) in backend/.env.")
         print("[INFO] To enable live Gemini calls:")
         print("       1. Get a free API key at https://aistudio.google.com/apikey (no billing required).")

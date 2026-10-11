@@ -117,6 +117,16 @@ export async function deleteConversation(conversationId) {
   });
 }
 
+function sanitizeHistoryForApi(history) {
+  if (!Array.isArray(history)) return [];
+  return history
+    .filter((item) => item && typeof item.content === 'string' && item.content.trim().length > 0)
+    .map((item) => ({
+      role: item.role === 'user' ? 'user' : 'assistant',
+      content: item.content.trim(),
+    }));
+}
+
 /**
  * Send a chat message with history, active conversation ID, RAG grounding, optional skill or dynamic artifact generation
  */
@@ -143,7 +153,7 @@ export async function sendChatMessage({
       model,
       provider,
       use_agent: useAgent,
-      history,
+      history: sanitizeHistoryForApi(history),
       use_rag: useRag,
       conversation_id: conversationId,
       skill,
@@ -183,7 +193,7 @@ export async function streamChatMessage({
       model,
       provider,
       use_agent: useAgent,
-      history,
+      history: sanitizeHistoryForApi(history),
       use_rag: useRag,
       conversation_id: conversationId,
       skill,

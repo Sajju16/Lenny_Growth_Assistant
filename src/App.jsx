@@ -78,13 +78,15 @@ function formatDbMessageForUi(msg) {
 }
 
 export default function App() {
-  const [conversations, setConversations] = useState(mockConversations);
+  const [isInitialHydrating, setIsInitialHydrating] = useState(true);
+  const [loadingConvId, setLoadingConvId] = useState(null);
+  const [conversations, setConversations] = useState([]);
   const [activeConversationId, setActiveConversationId] = useState(() => {
-    return localStorage.getItem('lenny_active_conv') || 'first-100-customers';
+    return localStorage.getItem('lenny_active_conv') || null;
   });
   const [selectedModelId, setSelectedModelId] = useState(mockModels[0].id); // 'qwen2.5:3b'
-  const [isArtifactOpen, setIsArtifactOpen] = useState(true);
-  const [activeArtifact, setActiveArtifact] = useState(mockArtifacts['artifact-first-100']);
+  const [isArtifactOpen, setIsArtifactOpen] = useState(false);
+  const [activeArtifact, setActiveArtifact] = useState(null);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isDesktopSidebarCollapsed, setIsDesktopSidebarCollapsed] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -110,11 +112,14 @@ export default function App() {
   }, [isLoading]);
 
   // Active conversation object
-  const activeConversation = conversations.find((c) => c.id === activeConversationId) || conversations[0] || {
-    id: 'default',
-    title: 'New Strategy Discussion',
-    messages: []
-  };
+  const activeConversation = conversations.find((c) => c.id === activeConversationId)
+    || (isInitialHydrating ? null : conversations[0])
+    || {
+      id: 'default',
+      title: 'New Strategy Discussion',
+      category: 'Strategic Planning',
+      messages: []
+    };
 
   // 1. Initial Load & Health Verification
   useEffect(() => {
@@ -143,69 +148,64 @@ export default function App() {
         if (!isMounted) return;
 
         if (serverConvs && serverConvs.length > 0) {
+          // Restore saved session from localStorage or use most recent
+          const savedId = localStorage.getItem('lenny_active_conv');
+          const targetId = (savedId && serverConvs.some((m) => m.id === savedId))
+            ? savedId
+            : serverConvs[0].id;
+
+          // Load full messages and artifacts for target conversation BEFORE committing state
+          let detail = null;
+          try {
+            detail = await getConversation(targetId);
+          } catch (e) {
+            console.error('Error loading detail for conversation:', e);
+          }
+          if (!isMounted) return;
+
+          let uiMessages = [];
+          let currentArt = null;
+
+          if (detail) {
+            currentArt = detail.active_artifact || (detail.artifacts && detail.artifacts[0]) || (detail.artifact_id && mockArtifacts[detail.artifact_id]) || null;
+            if (detail.messages) {
+              uiMessages = detail.messages.map(formatDbMessageForUi);
+              const assistantWithModel = detail.messages.filter((m) => m.role === 'assistant' && m.model);
+              if (assistantWithModel.length > 0) {
+                const lastUsedModel = assistantWithModel[assistantWithModel.length - 1].model;
+                if (mockModels.some((m) => m.id === lastUsedModel)) {
+                  setSelectedModelId(lastUsedModel);
+                }
+              }
+              const lastDbMsg = detail.messages[detail.messages.length - 1];
+              if (lastDbMsg && lastDbMsg.role === 'user') {
+                uiMessages.push({
+                  id: `interrupted-${lastDbMsg.id}`,
+                  sender: 'assistant',
+                  authorName: 'Lenny Assistant',
+                  timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                  isError: true,
+                  isTimeout: false,
+                  originalPrompt: lastDbMsg.content,
+                  content: 'Generation was interrupted before completion (such as by a browser refresh). You can retry or re-generate below.',
+                });
+              }
+            }
+          }
+
+          setActiveArtifact(currentArt);
+          setIsArtifactOpen(Boolean(currentArt));
+          setActiveConversationId(targetId);
+
           const mapped = serverConvs.map((sc) => ({
             id: sc.id,
             title: sc.title,
             category: sc.category || 'Strategic Planning',
             artifactId: sc.artifact_id,
             group: getConversationGroup(sc.updated_at),
-            messages: [],
+            messages: sc.id === targetId ? uiMessages : [],
           }));
           setConversations(mapped);
-
-          // Restore saved session from localStorage or use most recent
-          const savedId = localStorage.getItem('lenny_active_conv');
-          const targetId = (savedId && mapped.some((m) => m.id === savedId)) ? savedId : mapped[0].id;
-          setActiveConversationId(targetId);
-
-          // Load full messages and artifacts for active conversation
-          try {
-            const detail = await getConversation(targetId);
-            if (isMounted && detail) {
-              const currentArt = detail.active_artifact || (detail.artifacts && detail.artifacts[0]) || (detail.artifact_id && mockArtifacts[detail.artifact_id]) || null;
-              setActiveArtifact(currentArt);
-              if (currentArt) {
-                setIsArtifactOpen(true);
-              }
-
-              if (detail.messages) {
-                const uiMessages = detail.messages.map(formatDbMessageForUi);
-                const assistantWithModel = detail.messages.filter((m) => m.role === 'assistant' && m.model);
-                if (assistantWithModel.length > 0) {
-                  const lastUsedModel = assistantWithModel[assistantWithModel.length - 1].model;
-                  if (mockModels.some((m) => m.id === lastUsedModel)) {
-                    setSelectedModelId(lastUsedModel);
-                  }
-                }
-                const lastDbMsg = detail.messages[detail.messages.length - 1];
-                if (lastDbMsg && lastDbMsg.role === 'user') {
-                  uiMessages.push({
-                    id: `interrupted-${lastDbMsg.id}`,
-                    sender: 'assistant',
-                    authorName: 'Lenny Assistant',
-                    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                    isError: true,
-                    isTimeout: false,
-                    originalPrompt: lastDbMsg.content,
-                    content: 'Generation was interrupted before completion (such as by a browser refresh). You can retry or re-generate below.',
-                  });
-                }
-                setConversations((prev) =>
-                  prev.map((c) =>
-                    c.id === targetId
-                      ? {
-                          ...c,
-                          messages: uiMessages,
-                          artifactId: detail.artifact_id,
-                        }
-                      : c
-                  )
-                );
-              }
-            }
-          } catch (e) {
-            console.error('Error loading detail for conversation:', e);
-          }
         } else {
           // Initialize fresh PostgreSQL database with default conversation
           try {
@@ -225,14 +225,31 @@ export default function App() {
                 messages: mockConversations[0]?.messages || [],
               }]);
               setActiveConversationId(initConv.id);
+              setActiveArtifact(mockArtifacts['artifact-first-100']);
+              setIsArtifactOpen(true);
             }
           } catch (e) {
             console.warn('Could not seed initial conversation in DB:', e);
+            if (isMounted) {
+              setConversations(mockConversations);
+              setActiveConversationId(mockConversations[0]?.id || 'first-100-customers');
+              setActiveArtifact(mockArtifacts['artifact-first-100']);
+              setIsArtifactOpen(true);
+            }
           }
         }
       } catch (err) {
         if (isMounted) {
           setBackendHealth({ connected: false, error: err.message, checking: false });
+          // Fallback to offline mock conversations if backend is unreachable
+          setConversations(mockConversations);
+          setActiveConversationId(mockConversations[0]?.id || 'first-100-customers');
+          setActiveArtifact(mockArtifacts['artifact-first-100']);
+          setIsArtifactOpen(true);
+        }
+      } finally {
+        if (isMounted) {
+          setIsInitialHydrating(false);
         }
       }
     }
@@ -290,17 +307,14 @@ export default function App() {
   const handleSelectConversation = async (id) => {
     setActiveConversationId(id);
     localStorage.setItem('lenny_active_conv', id);
+    setLoadingConvId(id);
 
     try {
       const detail = await getConversation(id);
       if (detail) {
         const resolvedArt = detail.active_artifact || (detail.artifacts && detail.artifacts[0]) || (detail.artifact_id && mockArtifacts[detail.artifact_id]) || null;
         setActiveArtifact(resolvedArt);
-        if (resolvedArt) {
-          setIsArtifactOpen(true);
-        } else {
-          setActiveArtifact(null);
-        }
+        setIsArtifactOpen(Boolean(resolvedArt));
 
         if (detail.messages) {
           const uiMessages = detail.messages.map(formatDbMessageForUi);
@@ -341,6 +355,8 @@ export default function App() {
       }
     } catch (err) {
       console.error('Failed to load conversation details from PostgreSQL:', err);
+    } finally {
+      setLoadingConvId(null);
     }
   };
 
@@ -458,7 +474,7 @@ export default function App() {
     // Check if the last message in baseMessages is already an identical user prompt
     const lastMsg = baseMessages[baseMessages.length - 1];
     const isDuplicateUserPrompt = Boolean(
-      options?.isRetry && lastMsg && lastMsg.sender === 'user' && lastMsg.content === cleanText
+      lastMsg && lastMsg.sender === 'user' && lastMsg.content?.trim() === cleanText.trim()
     );
 
     const userMessage = {
@@ -489,12 +505,25 @@ export default function App() {
 
     setIsLoading(true);
 
-    // Prepare conversation history for the backend
-    const historyPayload = baseMessages
-      .filter((m) => !m.isError)
+    // Ensure the current user prompt / essay topic is not duplicated in prior history:
+    // If the last message in baseMessages was the user prompt being retried or executed,
+    // exclude it from prior messages sent to the backend.
+    const priorMessages = (isDuplicateUserPrompt && baseMessages.length > 0)
+      ? baseMessages.slice(0, -1)
+      : baseMessages;
+
+    // Prepare conversation history for the backend:
+    // Filter out error messages, empty streaming placeholders, and messages with empty/whitespace content.
+    const historyPayload = priorMessages
+      .filter((m) => {
+        if (m.isError) return false;
+        if (m.isStreaming && !m.content?.trim()) return false;
+        const textContent = m.content || m.contentIntro || '';
+        return typeof textContent === 'string' && textContent.trim().length > 0;
+      })
       .map((m) => ({
         role: m.sender === 'user' ? 'user' : 'assistant',
-        content: m.content || m.contentIntro || ''
+        content: (m.content || m.contentIntro || '').trim()
       }));
 
     const selectedModelObj = mockModels.find((m) => m.id === selectedModelId) || mockModels[0];
@@ -654,6 +683,12 @@ export default function App() {
         err.message?.includes('504') ||
         err.status === 504
       );
+      const isGeminiUnavailable = Boolean(
+        err.message?.includes('503') ||
+        err.message?.includes('high demand') ||
+        err.message?.includes('Spikes in demand') ||
+        err.message?.includes('temporarily unavailable')
+      );
       const errorMessage = {
         id: `err-${Date.now()}`,
         sender: 'assistant',
@@ -661,6 +696,7 @@ export default function App() {
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         isError: true,
         isTimeout,
+        isGeminiUnavailable,
         isEssay: isEssayCommand,
         originalPrompt: cleanText,
         content: err.message || 'Failed to communicate with FastAPI backend or local Ollama runtime.',
@@ -692,6 +728,7 @@ export default function App() {
         onCloseMobile={() => setIsMobileSidebarOpen(false)}
         isCollapsedDesktop={isDesktopSidebarCollapsed}
         onToggleCollapseDesktop={() => setIsDesktopSidebarCollapsed(!isDesktopSidebarCollapsed)}
+        isInitialHydrating={isInitialHydrating}
       />
 
       {/* Main Workspace (Shifts with sidebar) */}
@@ -702,8 +739,8 @@ export default function App() {
       >
         {/* Top Header */}
         <ChatHeader
-          title={activeConversation.title}
-          category={activeConversation.category}
+          title={isInitialHydrating ? 'Loading workspace...' : (activeConversation?.title || 'Lenny Assistant')}
+          category={isInitialHydrating ? 'Restoring session' : (activeConversation?.category || 'Strategic Planning')}
           selectedModelId={selectedModelId}
           onSelectModel={setSelectedModelId}
           onOpenMobileSidebar={() => setIsMobileSidebarOpen(true)}
@@ -740,19 +777,25 @@ export default function App() {
                 ) : (
                   <>
                     <h1 className="font-semibold text-[17px] text-on-surface truncate">
-                      {activeConversation.title}
+                      {isInitialHydrating ? (
+                        <span className="inline-block w-48 h-5 bg-[#EAEAE7] animate-pulse rounded" />
+                      ) : (
+                        activeConversation?.title || 'New Strategy Discussion'
+                      )}
                     </h1>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEditedTitle(activeConversation.title);
-                        setIsEditingTitle(true);
-                      }}
-                      aria-label="Edit title"
-                      className="p-1 text-outline hover:text-on-surface rounded hover:bg-surface-container transition-colors shrink-0"
-                    >
-                      <Edit3 className="w-3.5 h-3.5" />
-                    </button>
+                    {!isInitialHydrating && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditedTitle(activeConversation?.title || '');
+                          setIsEditingTitle(true);
+                        }}
+                        aria-label="Edit title"
+                        className="p-1 text-outline hover:text-on-surface rounded hover:bg-surface-container transition-colors shrink-0"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </>
                 )}
               </div>
@@ -809,51 +852,79 @@ export default function App() {
               id="chat-stream"
             >
               <div className="max-w-[680px] mx-auto space-y-6">
-                {/* Empty State when chat has no messages */}
-                {(!activeConversation.messages || activeConversation.messages.length === 0) && (
-                  <div className="py-12 px-4 text-center space-y-4 max-w-md mx-auto">
-                    <div className="w-12 h-12 rounded-2xl bg-primary-fixed/30 text-primary flex items-center justify-center mx-auto shadow-sm">
-                      <Sparkles className="w-6 h-6 text-primary" />
+                {isInitialHydrating || loadingConvId === activeConversationId ? (
+                  <div className="space-y-6 pt-4 animate-in fade-in duration-200">
+                    <div className="flex items-center justify-center gap-2 py-3 text-[13px] text-outline">
+                      <span className="w-2 h-2 rounded-full bg-primary animate-ping" />
+                      <span>Restoring conversation history and model context...</span>
                     </div>
-                    <h2 className="text-[20px] font-bold text-on-surface">
-                      How can Lenny Growth assist your strategy?
-                    </h2>
-                    <p className="text-[14px] text-on-surface-variant leading-relaxed">
-                      Ask strategic questions on product-led growth, activation funnels, PMF benchmarks, or pricing architecture synthesized live by local Ollama ({selectedModelId}) and backed by PostgreSQL session storage.
-                    </p>
-
-                    <div className="pt-4 space-y-2 text-left">
-                      <span className="text-[11px] font-semibold text-outline uppercase tracking-wider block">
-                        Suggested Inquiries
-                      </span>
-                      {[
-                        'According to April Dunford, what are the key steps for crafting a winning sales pitch?',
-                        'What is the Sean Ellis benchmark for Product-Market Fit?',
-                        'When should a SaaS company shift to usage-based pricing?'
-                      ].map((prompt, pIdx) => (
-                        <button
-                          key={pIdx}
-                          type="button"
-                          onClick={() => handleSendMessage(prompt, null)}
-                          className="w-full p-2.5 rounded-xl bg-surface-container-lowest border border-[#EAEAE7] hover:border-primary/50 text-[13px] text-on-surface hover:bg-surface-container transition-all flex items-center justify-between text-left group"
-                        >
-                          <span className="line-clamp-1">{prompt}</span>
-                          <ArrowRight className="w-3.5 h-3.5 text-outline group-hover:text-primary transition-transform group-hover:translate-x-0.5 shrink-0 ml-2" />
-                        </button>
-                      ))}
+                    {/* User message skeleton */}
+                    <div className="flex justify-end">
+                      <div className="w-2/3 max-w-sm p-4 rounded-2xl bg-surface-container-high/60 animate-pulse space-y-2">
+                        <div className="h-3.5 bg-[#D5D5D0] rounded w-4/5" />
+                        <div className="h-3.5 bg-[#D5D5D0] rounded w-2/3" />
+                      </div>
+                    </div>
+                    {/* Assistant message skeleton */}
+                    <div className="flex items-start gap-3">
+                      <div className="w-8 h-8 rounded-xl bg-surface-container-high animate-pulse shrink-0" />
+                      <div className="flex-1 max-w-xl p-5 rounded-2xl bg-surface-container-lowest border border-[#EAEAE7] animate-pulse space-y-3">
+                        <div className="h-3.5 bg-[#EAEAE7] rounded w-3/4" />
+                        <div className="h-3.5 bg-[#EAEAE7] rounded w-full" />
+                        <div className="h-3.5 bg-[#EAEAE7] rounded w-5/6" />
+                        <div className="h-3 bg-[#EAEAE7]/80 rounded w-1/3 pt-1" />
+                      </div>
                     </div>
                   </div>
-                )}
+                ) : (
+                  <>
+                    {/* Empty State when chat has no messages */}
+                    {(!activeConversation?.messages || activeConversation.messages.length === 0) && (
+                      <div className="py-12 px-4 text-center space-y-4 max-w-md mx-auto">
+                        <div className="w-12 h-12 rounded-2xl bg-primary-fixed/30 text-primary flex items-center justify-center mx-auto shadow-sm">
+                          <Sparkles className="w-6 h-6 text-primary" />
+                        </div>
+                        <h2 className="text-[20px] font-bold text-on-surface">
+                          How can Lenny Growth assist your strategy?
+                        </h2>
+                        <p className="text-[14px] text-on-surface-variant leading-relaxed">
+                          Ask strategic questions on product-led growth, activation funnels, PMF benchmarks, or pricing architecture synthesized live by local Ollama ({selectedModelId}) and backed by PostgreSQL session storage.
+                        </p>
 
-                {/* Render conversation messages */}
-                {activeConversation.messages?.map((msg) => (
-                  <ChatMessage
-                    key={msg.id}
-                    message={msg}
-                    onOpenArtifact={handleOpenArtifact}
-                    onRetry={(prompt, retryOpts) => handleSendMessage(prompt, null, { isRetry: true, ...retryOpts })}
-                  />
-                ))}
+                        <div className="pt-4 space-y-2 text-left">
+                          <span className="text-[11px] font-semibold text-outline uppercase tracking-wider block">
+                            Suggested Inquiries
+                          </span>
+                          {[
+                            'According to April Dunford, what are the key steps for crafting a winning sales pitch?',
+                            'What is the Sean Ellis benchmark for Product-Market Fit?',
+                            'When should a SaaS company shift to usage-based pricing?'
+                          ].map((prompt, pIdx) => (
+                            <button
+                              key={pIdx}
+                              type="button"
+                              onClick={() => handleSendMessage(prompt, null)}
+                              className="w-full p-2.5 rounded-xl bg-surface-container-lowest border border-[#EAEAE7] hover:border-primary/50 text-[13px] text-on-surface hover:bg-surface-container transition-all flex items-center justify-between text-left group"
+                            >
+                              <span className="line-clamp-1">{prompt}</span>
+                              <ArrowRight className="w-3.5 h-3.5 text-outline group-hover:text-primary transition-transform group-hover:translate-x-0.5 shrink-0 ml-2" />
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Render conversation messages */}
+                    {activeConversation?.messages?.map((msg) => (
+                      <ChatMessage
+                        key={msg.id}
+                        message={msg}
+                        onOpenArtifact={handleOpenArtifact}
+                        onRetry={(prompt, retryOpts) => handleSendMessage(prompt, null, { isRetry: true, ...retryOpts })}
+                      />
+                    ))}
+                  </>
+                )}
 
                 {/* Loading / Progress Indicator with Multi-Phase Timer Feedback */}
                 {isLoading && (

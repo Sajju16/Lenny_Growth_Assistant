@@ -565,3 +565,227 @@ def test_chat_endpoint_timeout_persists_actionable_guidance(client_with_test_db)
         assert conv_data["messages"][0]["role"] == "user"
         assert conv_data["messages"][1]["role"] == "assistant"
         assert "Local Inference Timeout Reached" in conv_data["messages"][1]["content"]
+
+
+def test_check_essay_completeness_detects_mid_sentence_truncation():
+    """Verify that a draft ending mid-sentence is flagged as incomplete."""
+    from skills.essay_skill import check_essay_completeness
+
+    truncated_text = (
+        "# The Dynamic Pursuit of Product-Market Fit\n\n"
+        "## The Hook: Why Conventional Wisdom Fails\n"
+        "Conventional wisdom suggests finding PMF is an event. In reality it is ongoing.\n\n"
+        "## The Diagnostic Framework: Core Mechanics\n"
+        "### Pillar 1: Non-scalable iteration.\n"
+        "### Pillar 2: Scalability\n"
+        "Once"
+    )
+    is_complete, reason, _ = check_essay_completeness(truncated_text)
+    assert is_complete is False
+    assert "mid-sentence" in reason.lower()
+
+
+def test_check_essay_completeness_detects_duplicate_h1_titles():
+    """Verify that a draft containing repeated # headers is flagged as incomplete."""
+    from skills.essay_skill import check_essay_completeness
+
+    duplicate_title_text = (
+        "# Product-Market Fit Playbook\n\n"
+        "## The Hook: Why Conventional Wisdom Fails\n"
+        "Intro text here.\n\n"
+        "# Product-Market Fit Playbook\n\n"
+        "## The Hook: Why Conventional Wisdom Fails\n"
+        "Repeated text here."
+    )
+    is_complete, reason, _ = check_essay_completeness(duplicate_title_text)
+    assert is_complete is False
+    assert "duplicate h1" in reason.lower()
+
+
+def test_deduplicate_essay_openings():
+    """Verify that deduplicate_essay_openings removes repeated titles and intros."""
+    from skills.essay_skill import deduplicate_essay_openings
+
+    bad_text = (
+        "# Main Title\n\n"
+        "## The Hook: Why Conventional Wisdom Fails\n"
+        "Initial analysis.\n\n"
+        "# Main Title\n\n"
+        "## The Hook: Why Conventional Wisdom Fails\n"
+        "## The Diagnostic Framework: Core Mechanics\n"
+        "Deep framework analysis."
+    )
+    cleaned = deduplicate_essay_openings(bad_text)
+    assert cleaned.count("# Main Title") == 1
+    assert "Initial analysis." in cleaned
+    assert "Deep framework analysis." in cleaned
+
+
+def test_strip_trailing_incomplete_sentence():
+    """Verify that strip_trailing_incomplete_sentence trims dangling unfinished thoughts."""
+    from skills.essay_skill import strip_trailing_incomplete_sentence
+
+    dangling = "This is a completed sentence. And another completed thought. Once"
+    cleaned = strip_trailing_incomplete_sentence(dangling)
+    assert cleaned == "This is a completed sentence. And another completed thought."
+
+
+@pytest.mark.anyio
+async def test_incomplete_essay_not_persisted_as_artifact():
+    """
+    Verify that if cloud LLM generation yields truncated incomplete content (< 950 words, cuts off mid-sentence),
+    generate_ship30_essay raises HTTPException(502) and DOES NOT persist a broken artifact in PostgreSQL.
+    """
+    from fastapi import HTTPException
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from database.connection import Base
+    import database.crud as crud
+    from database.schemas import ConversationCreate
+
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    TestingSession = sessionmaker(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    db = TestingSession()
+
+    conv = crud.create_conversation(db, ConversationCreate(id="conv-incomplete-test", title="Incomplete Test"))
+
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve.return_value = RetrievalResult(
+        has_sufficient_context=True,
+        context_text="PMF evidence",
+        citations=[Citation(guest="Casey Winters", episode_title="PMF", excerpt="Fit", relevance_score=0.9)],
+        raw_chunks=[{"text": "PMF evidence"}],
+    )
+
+    # Cloud provider returning truncated draft of 300 words that ends mid-sentence
+    truncated_content = (
+        "# The Dynamic Pursuit of PMF\n\n"
+        "## The Hook: Why Conventional Wisdom Fails\n"
+        "Conventional wisdom is wrong. " * 30 + "\n\n"
+        "### Pillar 2: Scalability\n"
+        "Once"
+    )
+
+    mock_provider = MagicMock()
+    mock_provider.is_cloud = True
+    mock_provider.model_name = "gemini-2.5-flash"
+    mock_provider.provider_name = "gemini"
+    mock_provider.generate_response = AsyncMock(return_value=ProviderResponse(
+        content=truncated_content,
+        model="gemini-2.5-flash",
+        provider="gemini",
+        citations=[],
+    ))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await generate_ship30_essay(
+            topic="How to Find Product-Market Fit",
+            provider=mock_provider,
+            retriever=mock_retriever,
+            conversation_id=conv.id,
+            db=db,
+            timeout=10.0,
+        )
+
+    assert exc_info.value.status_code == 502
+    assert "incomplete" in exc_info.value.detail.lower()
+
+    # CRITICAL: Verify NO artifact was persisted for the incomplete essay
+    artifacts = crud.list_conversation_artifacts(db, conv.id)
+    assert len(artifacts) == 0, f"Expected 0 artifacts but found {len(artifacts)}"
+
+
+def test_action_plan_formatting_removes_stray_numbers_and_renumbers():
+    """Verify clean_markdown_formatting and calibrate_essay_pacing remove lone '3.' and renumber 1..5."""
+    from skills.essay_skill import clean_markdown_formatting, calibrate_essay_pacing
+
+    raw_plan_text = (
+        "# Strategic Playbook\n\n"
+        "## The Monday Morning Action Plan\n\n"
+        "1.  **Conduct Founder-Led Immersion (Owner: CEO):** First action item.\n"
+        "2.  **Establish Metrics (Owner: Growth):** Second action item.\n"
+        "3.\n\n"
+        "3.  **Implement Scorecard (Owner: Product):** Third action item.\n"
+        "4.  **Initiate Audit (Owner: Ops):** Fourth action item.\n"
+        "5.  **Launch Wallet Share (Owner: BizDev):** Fifth action item.\n\n"
+        "## Conclusion: The Compounding Advantage\n\n"
+        "Final concluding synthesis."
+    )
+
+    cleaned = clean_markdown_formatting(raw_plan_text)
+    assert "\n3.\n" not in cleaned
+    assert "\n3.\n\n" not in cleaned
+
+    calibrated = calibrate_essay_pacing(raw_plan_text)
+    assert "\n3.\n" not in calibrated
+    assert "1.  **Conduct" in calibrated or "1. **Conduct" in calibrated
+    assert "2.  **Establish" in calibrated or "2. **Establish" in calibrated
+    assert "3.  **Implement" in calibrated or "3. **Implement" in calibrated
+    assert "4.  **Initiate" in calibrated or "4. **Initiate" in calibrated
+    assert "5.  **Launch" in calibrated or "5. **Launch" in calibrated
+
+
+def test_deduplicate_essay_openings_removes_repeated_titles_and_h2():
+    """Verify deduplicate_essay_openings removes redundant H2 titles repeating H1."""
+    from skills.essay_skill import deduplicate_essay_openings
+
+    repeated_text = (
+        "# The Product-Market Fit Imperative\n\n"
+        "## The Product-Market Fit Imperative\n\n"
+        "## The Hook: Why Conventional Wisdom Fails\n"
+        "Conventional wisdom is flawed.\n\n"
+        "# The Product-Market Fit Imperative\n\n"
+        "## The Diagnostic Framework: Core Mechanics\n"
+        "Pillar breakdown."
+    )
+    cleaned = deduplicate_essay_openings(repeated_text)
+    assert cleaned.count("# The Product-Market Fit Imperative") == 1
+    assert "## The Product-Market Fit Imperative" not in cleaned
+    assert "## The Hook: Why Conventional Wisdom Fails" in cleaned
+    assert "## The Diagnostic Framework: Core Mechanics" in cleaned
+
+
+def test_calibrate_essay_pacing_targets_1200_to_1350_words():
+    """Verify calibrate_essay_pacing calibrates an oversized ~2000-word draft down to ~1200-1350 words."""
+    from skills.essay_skill import calibrate_essay_pacing
+
+    # Construct an oversized ~1,900-word draft with all mandatory sections
+    hook = "## The Hook: Why Conventional Wisdom Fails\n" + "Conventional wisdom is wrong. The industry assumes product-market fit is static. In truth it changes constantly. " * 25 + "\n\n"
+    pillar1 = "### Pillar 1: Iteration\n" + "Founder led iteration is key. Casey Winters explains this deeply. The market demands rapid discovery. Teams must build tight feedback loops with early adopters. " * 15 + "\n\n"
+    pillar2 = "### Pillar 2: Metrics\n" + "Unit economics matter. Dan Hockenmaier explains GMV. Marketplace dynamics dictate transaction velocity and liquidity. Scaled platforms monitor contribution margin closely. " * 15 + "\n\n"
+    pillar3 = "### Pillar 3: Liquidity\n" + "Liquidity drives marketplaces. Dan Hockenmaier shows wallet share. Category density allows network effects to compound. Buyers and sellers concentrate activity here. " * 15 + "\n\n"
+    playbook = "## The Tactical Playbook: Real-World Execution\n" + "Execution is required across multiple phases. Teams must audit existing workflows before expanding. Real world deployment demands operational rigor. " * 25 + "\n\n"
+    pitfalls = "## Pitfalls & Counter-Intuitive Truths\n" + "Traps await unprepared teams. Scaling too early drains precious runway. Assuming fit lasts forever leads to decline. " * 20 + "\n\n"
+    plan = (
+        "## The Monday Morning Action Plan\n\n"
+        "1. **Action One (Owner: CEO):** First extensive task with detailed explanation. " * 5 + "\n"
+        "2. **Action Two (Owner: Growth):** Second extensive task with detailed explanation. " * 5 + "\n"
+        "3.\n\n"
+        "3. **Action Three (Owner: Product):** Third extensive task with detailed explanation. " * 5 + "\n"
+        "4. **Action Four (Owner: Ops):** Fourth extensive task with detailed explanation. " * 5 + "\n"
+        "5. **Action Five (Owner: BizDev):** Fifth extensive task with detailed explanation. " * 5 + "\n\n"
+    )
+    conclusion = "## Conclusion: The Compounding Advantage\n" + "The compounding advantage is achieved through disciplined execution.\n"
+
+    oversized = (
+        "# The Product-Market Fit Imperative\n\n"
+        + hook + "## The Diagnostic Framework: Core Mechanics\n\n"
+        + pillar1 + pillar2 + pillar3
+        + playbook + pitfalls + plan + conclusion
+    )
+
+    words_before = len(oversized.split())
+    assert words_before > 1600, f"Expected >1600 words, got {words_before}"
+
+    calibrated = calibrate_essay_pacing(oversized)
+    words_after = len(calibrated.split())
+
+    # Must be calibrated into the target 1,200-1,350 range
+    assert 1200 <= words_after <= 1350, f"Expected 1200-1350 words, got {words_after}"
+    # Must preserve conclusion and guest citations
+    assert "## Conclusion: The Compounding Advantage" in calibrated
+    assert "Casey Winters" in calibrated
+    assert "Dan Hockenmaier" in calibrated
+    # Must have removed the stray 3.
+    assert "\n3.\n" not in calibrated
