@@ -1,9 +1,9 @@
 # Autonomous Coding Agent Execution Trajectory & Activity Logs
 
-**Document Version:** 1.0.0  
-**Project:** Lenny Growth Assistant  
-**Agent Architecture:** Antigravity Agentic Pair Programmer (Advanced Coding Agent)  
-**Security Policy:** All private API keys, user tokens, and sensitive system credentials have been scrubbed.  
+**Document Version:** 1.1.0
+**Project:** Lenny Growth Assistant
+**Agent Architecture:** Antigravity Agentic Pair Programmer (Advanced Coding Agent)
+**Security Policy:** All private API keys, user tokens, and sensitive system credentials have been scrubbed.
 
 ---
 
@@ -28,7 +28,10 @@ Phase 3B: Cloud LLM Provider Switching & Assignment-Required Claude Agent
 Phase 4: "Ship 30 for 30" Essay Skill & Secure Dynamic Artifact Generation
    │
    ▼
-Phase 5: Final Assignment Compliance Audit, Dockerization & Production Readiness
+Phase 5: Assignment Compliance Audit, Dockerization & Baseline Test Suite
+   │
+   ▼
+Phase 6: Streaming Latency Profiling, Native Ollama Metrics & History Truncation
 ```
 
 ---
@@ -95,6 +98,23 @@ Phase 5: Final Assignment Compliance Audit, Dockerization & Production Readiness
   - Built `backend/Dockerfile`, multi-stage frontend `Dockerfile`, `nginx.conf`, and updated `docker-compose.yml`.
   - Hardened `.gitignore` and verified zero sensitive files or credentials exist in the repository.
 
+### Phase 6: Streaming Latency Profiling, Native Ollama Metrics & History Truncation
+- **Objective:** Diagnose live inference latency regressions in multi-turn browser sessions, capture native Ollama streaming metrics, and prevent prompt token explosion.
+- **Context & Diagnosis:**
+  - In a real multi-turn browser test querying Dan Hockenmaier on retention, total backend response time took **109.56 seconds** (`qwen2.5:1.5b`), with a Time-To-First-Token (TTFT) of **60.30 seconds**, while an earlier single-turn test completed in **43.5 seconds** (TTFT 3.97s, retrieval 25.7ms).
+  - Conversely, an unsupported out-of-domain query completed in **3.1 seconds** via fast RAG refusal without invoking LLM inference.
+- **Root Cause Analysis:**
+  1. *Prompt Token Bloat:* Inspection revealed that in multi-turn browser sessions, the entire accumulated conversation history was being sent to Ollama on each turn. The prompt grew to **2,828 tokens**, requiring **91.9 seconds** just for CPU prompt evaluation (`prompt_eval_duration`) before the first token could emit. In contrast, a fresh single-turn prompt was ~833 tokens and required only **2.45 seconds** of prompt evaluation.
+  2. *Conflated TPS Measurement:* The system was dividing total tokens by total elapsed duration (`tokens / elapsed`), which conflated 60s of prompt evaluation time with actual generation speed, reporting a distorted ~2.92 TPS instead of the true generation throughput.
+- **Key Actions & Optimizations:**
+  - *Native Ollama Metrics Capture:* Modified `backend/llm/ollama_provider.py` so that when the final stream chunk arrives with `done: true`, native metrics (`load_duration`, `prompt_eval_count`, `prompt_eval_duration`, `eval_count`, `eval_duration`, `total_duration`) are captured, converted to readable seconds, and logged.
+  - *Accurate Throughput Calculation:* Separated TTFT (`first_token_time`) from generation duration (`gen_duration = elapsed - first_token_time`). Calculated real generation TPS as `token_count / gen_duration`.
+  - *Conversation History Truncation Policy:* Implemented `_truncate_history` in `backend/main.py`. Truncates history to the latest **4 messages (2 full user-assistant turns)** before passing messages to the LLM. Applied identically to both `/api/chat/stream` and `/api/chat`. Preserved current user query, RAG retrieval context, citation grounding, and model selection.
+  - *Retrieval Context Bounding:* Bounded retrieval for normal chat queries to top-2 chunks (`top_k=2`), preserving verified guest citations while keeping prompt overhead bounded.
+  - *In-Memory Embedding Caching:* Caches repeated query embeddings in `OllamaEmbeddingClient` (0ms retrieval overhead on repeated queries).
+  - *Automated Benchmark Script:* Created `backend/measure_stream.py` to benchmark streaming TTFT, total duration, actual TPS, word count, and model load status across repeated runs.
+  - *Test Suite Expansion:* Added 50 new automated tests covering history truncation, streaming SSE events, native Ollama metrics extraction, model selection overrides, and timeout edge cases, expanding the automated suite from 55 to **105 passing tests**.
+
 ---
 
 ## 3. Notable Debugging Episodes & Failed Attempts
@@ -102,7 +122,7 @@ Phase 5: Final Assignment Compliance Audit, Dockerization & Production Readiness
 ### Episode 1: Windows AppData Python Environment vs. Local venv
 - **Symptom:** `.\backend\.venv\Scripts\pytest.exe` failed with `No Python at C:\Users\...\PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0\python.exe`.
 - **Root Cause:** Windows Store Python execution alias had an updated build path that mismatched the virtual environment's original `pyvenv.cfg` pointer.
-- **Resolution:** Set `PYTHONPATH=".;.venv\Lib\site-packages"` and ran directly via `python -m pytest tests/ -v`, allowing all 55 tests to run cleanly against the venv packages.
+- **Resolution:** Set `PYTHONPATH=".;.venv\Lib\site-packages"` and ran directly via `python -m pytest tests/ -v`, allowing all tests to run cleanly against the venv packages.
 
 ### Episode 2: PowerShell Quote Escaping for Boolean `$true`
 - **Symptom:** Calling `Invoke-RestMethod` from PowerShell CLI with `$true` in inline JSON failed with parser error `Missing an argument for parameter Body`.
@@ -113,3 +133,19 @@ Phase 5: Final Assignment Compliance Audit, Dockerization & Production Readiness
 - **Symptom:** Running `docker --version` failed with `CommandNotFoundException: docker is not recognized`.
 - **Root Cause:** Docker Desktop is not installed or not in the system `PATH` on the current Windows host machine.
 - **Resolution:** Documented the exact environment status honestly in `SUBMISSION_AUDIT.md`. Provided complete multi-stage `Dockerfile` and `docker-compose.yml` configurations with host networking (`host.docker.internal`) so that any user with Docker Desktop can run `docker compose up --build` immediately.
+
+### Episode 4: Conflating TTFT with Generation Speed in TPS Computation
+- **Symptom:** Throughput was logged as ~2.9 tokens/sec even when tokens were visibly streaming quickly after the initial pause.
+- **Root Cause:** The formula `tokens / total_duration` included the long prompt-evaluation time (TTFT) in the denominator. A 60-second prompt evaluation pause before emitting 300 tokens resulted in `300 / 103s = 2.9 TPS`, obscuring that token generation was actually running at ~7 tokens/sec.
+- **Resolution:** Refactored the metric to record `first_token_time`, calculating `gen_duration = total_time - first_token_time`, and computing `actual_tps = tokens / gen_duration`.
+
+### Episode 5: Prompt Evaluation Blowup from Accumulating History
+- **Symptom:** Second and third chat questions in the React UI took dramatically longer (90s+) to begin streaming than the first question.
+- **Root Cause:** Every turn appended both the user query and the full assistant response to the React conversation state. On turn 3, passing all historical messages plus RAG context pushed prompt length to 2,828 tokens, which saturated CPU matrix multiplication during the prefill phase.
+- **Failed Attempt / Rejected Option:** Pruning retrieved transcript chunks down to 0 or 1 chunk. Rejected because it directly degraded answer grounding and broke multi-guest citation provenance.
+- **Resolution:** Retained verified retrieval chunks and instead truncated older conversation turns to a fixed 4-message window (latest 2 user-assistant pairs). This keeps prompt tokens under ~1,000 tokens while preserving recent conversational context.
+
+### Episode 6: Staged Git Whitespace & Newline Parsing
+- **Symptom:** `git diff --cached --check` failed with exit code 1 due to trailing whitespace on blank lines and multiple blank lines at EOF in test and database files.
+- **Root Cause:** Editor auto-formatting and CRLF/LF line-ending translations left trailing indentation on blank lines inside Python `with` blocks and extra newlines before EOF.
+- **Resolution:** Executed UTF-8 script normalization stripping line-ending whitespace (`(?m)[ \t]+$`) and normalizing EOF to exactly one trailing newline across all affected files. Staged diffs verified 100% clean across both working tree and staged index.
