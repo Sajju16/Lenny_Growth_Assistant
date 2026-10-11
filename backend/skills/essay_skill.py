@@ -17,17 +17,30 @@ logger = logging.getLogger("lenny-growth-backend.skills.essay")
 SHIP30_SYSTEM_PROMPT = (
     "You are an elite product growth essayist and senior operator specializing in the 'Ship 30 for 30' long-form framework. "
     "Your objective is to produce an authoritative, comprehensive, deeply practical growth strategy essay "
-    "targeting approximately 1,250 words based strictly on verified podcast transcript evidence from Lenny's Podcast.\n\n"
+    "targeting approximately 1,250 words (reasonable target range: 1,150–1,350 words) based strictly on verified podcast transcript evidence from Lenny's Podcast.\n\n"
     "MANDATORY ESSAY STRUCTURE:\n"
+    "Every essay MUST complete all 6 core sections and a conclusion in sequence:\n"
     "1. ATOMIC HEADLINE: # [Punchy, high-signal title promising a transformative growth outcome]\n"
-    "2. THE HOOK: ## The Hook: Why Conventional Wisdom Fails (expose an industry misconception/anti-pattern in 2-3 paragraphs)\n"
-    "3. THE DIAGNOSTIC FRAMEWORK: ## The Diagnostic Framework: Core Mechanics (break down mental models and metrics with guest citations)\n"
-    "4. THE TACTICAL PLAYBOOK: ## The Tactical Playbook: Real-World Execution (step-by-step playbooks with bold terms and transcript examples)\n"
-    "5. PITFALLS & FAILURE MODES: ## Pitfalls & Counter-Intuitive Truths (2-3 common traps and how elite teams avoid them)\n"
-    "6. MONDAY MORNING ACTION PLAN: ## The Monday Morning Action Plan (5 concrete operational checklist items)\n\n"
-    "WRITING & GROUNDING RULES:\n"
-    "- Attribute all strategies directly to the podcast guests present in the provided transcript evidence. Never fabricate quotes, guests, or episodes.\n"
-    "- Write substantive, fully developed paragraphs. Target length is approximately 1,250 words."
+    "2. THE HOOK: ## The Hook: Why Conventional Wisdom Fails\n"
+    "   - Expose the prevailing industry misconception or anti-pattern with concrete real-world context.\n"
+    "   - Present the contrarian operator perspective grounded in the podcast guest's insights.\n"
+    "3. THE DIAGNOSTIC FRAMEWORK: ## The Diagnostic Framework: Core Mechanics\n"
+    "   - Break down 3 distinct mental models, metrics, or causal mechanisms (Pillar 1, Pillar 2, Pillar 3).\n"
+    "   - Directly attribute key insights to the featured podcast guest(s) and their verified experience.\n"
+    "4. THE TACTICAL PLAYBOOK: ## The Tactical Playbook: Real-World Execution\n"
+    "   - Provide 3 distinct execution steps (e.g. Phase 1: Audit, Phase 2: Alignment, Phase 3: Rollout).\n"
+    "   - Emphasize bold operational terms and concrete examples from the transcript.\n"
+    "5. PITFALLS & COUNTER-INTUITIVE TRUTHS: ## Pitfalls & Counter-Intuitive Truths\n"
+    "   - Detail 3 distinct failure modes or subtle traps and how elite teams avoid them.\n"
+    "6. MONDAY MORNING ACTION PLAN: ## The Monday Morning Action Plan\n"
+    "   - 5 concrete operational checklist items with clear owners, metrics, and milestones.\n"
+    "7. EXECUTIVE CONCLUSION: ## Conclusion: The Compounding Advantage\n"
+    "   - A concise strategic synthesis bringing together the essay's core thesis.\n\n"
+    "CRITICAL ANTI-REPETITION & PACING RULES:\n"
+    "- Prioritize completing every required section before expanding prose. Ensure '## The Monday Morning Action Plan' and '## Conclusion: The Compounding Advantage' are fully written.\n"
+    "- NEVER repeat the same sentence, phrase, quote, or claim. Use concise, distinct paragraphs with concrete examples instead of repeating general claims.\n"
+    "- Maintain steady progress across all sections so the complete essay reaches approximately 1,250 words (acceptable range: 1,150–1,350 words).\n"
+    "- Attribute all strategies directly to the podcast guests present in the provided transcript evidence. Never fabricate quotes, guests, or episodes."
 )
 
 
@@ -121,14 +134,26 @@ async def generate_ship30_essay(
             provider=provider.provider_name,
         )
 
-    # 2. Build streamlined generation prompt (preserves the ~1,250-word target without duplicate section descriptions)
+    # 2. Build streamlined generation prompt
     prompt = (
         f"Write a full-length, authoritative 'Ship 30 for 30' executive essay on the following topic:\n"
         f"TOPIC: {topic}\n\n"
-        "Follow the 6 mandatory sections from the instructions (# Atomic Headline, ## The Hook, ## The Diagnostic Framework, "
-        "## The Tactical Playbook, ## Pitfalls & Counter-Intuitive Truths, ## The Monday Morning Action Plan). "
-        "Ground all claims directly in the provided transcript evidence, citing the featured podcast guests. "
-        "Maintain thorough executive depth targeting approximately 1,250 words."
+        "EXECUTION REQUIREMENTS:\n"
+        "1. Mandatory Structure: You MUST complete all 6 sections and the conclusion in sequence:\n"
+        "   - # [Atomic Headline]\n"
+        "   - ## The Hook: Why Conventional Wisdom Fails\n"
+        "   - ## The Diagnostic Framework: Core Mechanics (Pillar 1, Pillar 2, Pillar 3)\n"
+        "   - ## The Tactical Playbook: Real-World Execution (Phase 1, Phase 2, Phase 3)\n"
+        "   - ## Pitfalls & Counter-Intuitive Truths (Trap 1, Trap 2, Trap 3)\n"
+        "   - ## The Monday Morning Action Plan (Action Items 1 to 5)\n"
+        "   - ## Conclusion: The Compounding Advantage\n"
+        "2. Section Completion Priority: Prioritize completing EVERY required section before expanding prose. "
+        "Do not stop or truncate before '## The Monday Morning Action Plan' and '## Conclusion: The Compounding Advantage' are completely finished.\n"
+        "3. Anti-Repetition: Write concise, distinct paragraphs with concrete real-world details. "
+        "Never loop or repeat identical sentences, quotes, or claims across sections.\n"
+        "4. Evidence Grounding: Ground all claims and guest attributions strictly in the retrieved Lenny podcast transcript excerpts. "
+        "Never fabricate quotes, data points, or citations.\n"
+        "5. Target Length: Maintain steady pacing across all sections to achieve approximately 1,250 words total (target range: 1,150–1,350 words)."
     )
 
     citation_dicts = [c.model_dump() if hasattr(c, "model_dump") else c.dict() for c in citations]
@@ -143,6 +168,8 @@ async def generate_ship30_essay(
             has_sufficient_context=True,
             timeout=essay_timeout,
             system_prompt=SHIP30_SYSTEM_PROMPT,
+            max_tokens=2200,
+            repeat_penalty=1.15,
         )
     except HTTPException as exc:
         if exc.status_code == status.HTTP_504_GATEWAY_TIMEOUT:
@@ -183,24 +210,26 @@ async def generate_ship30_essay(
     eval_count = response_obj.eval_count
     total_duration = response_obj.total_duration
 
-    # 3b. Bounded enrichment safeguard: If the initial call concluded prematurely (< 600 words)
-    # and we have sufficient remaining time budget (>= 120s), perform AT MOST ONE bounded expansion pass.
+    # 3b. Bounded enrichment safeguard: If the initial call concluded prematurely (< 1100 words)
+    # and we have sufficient remaining time budget (>= 100s), perform AT MOST ONE bounded expansion pass
+    # to bring the essay into the target range of 1,150–1,350 words.
     elapsed_so_far = time.monotonic() - start_time
     remaining_budget = essay_timeout - elapsed_so_far
-    if words < 600 and remaining_budget >= 120.0:
+    if words < 1100 and remaining_budget >= 100.0:
         logger.info(
-            "Initial essay draft reached %d words. Executing bounded one-time enrichment pass (remaining budget: %.1fs)",
+            "Initial essay draft reached %d words (below 1,150-word minimum threshold). Executing bounded enrichment pass (remaining budget: %.1fs)",
             words,
             remaining_budget,
         )
         enrich_prompt = (
             f"Here is the draft of the 'Ship 30 for 30' essay on '{topic}':\n\n"
             f"{essay_content}\n\n"
-            "The draft requires tactical expansion to reach comprehensive executive depth. "
+            "The draft requires tactical expansion to reach the target range of 1,150–1,350 words (~1,250 words). "
             "Write a detailed supplementary section containing:\n"
             "1. ## Deep-Dive Operational Nuances & Failure Modes: 2-3 specific case examples from the transcript evidence.\n"
             "2. ## Advanced Monday Morning Implementation Checklist: A step-by-step execution protocol for growth teams.\n\n"
-            "Ground every point strictly in the verified transcript excerpts. Do NOT repeat sections already present."
+            "Ground every point strictly in the verified transcript excerpts. Do NOT repeat sections already present. "
+            f"Write approximately {max(150, 1250 - words)} words of substantive, high-density analysis."
         )
         try:
             enrich_timeout = min(remaining_budget - 10.0, 150.0)
@@ -212,6 +241,8 @@ async def generate_ship30_essay(
                 has_sufficient_context=True,
                 timeout=enrich_timeout,
                 system_prompt=SHIP30_SYSTEM_PROMPT,
+                max_tokens=2200,
+                repeat_penalty=1.15,
             )
             if enrich_obj.content and len(enrich_obj.content.split()) >= 10:
                 essay_content = f"{essay_content.rstrip()}\n\n{enrich_obj.content.lstrip()}"

@@ -57,6 +57,8 @@ class OllamaProvider(BaseLLMProvider):
         timeout: Optional[float] = None,
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
+        repeat_penalty: Optional[float] = None,
+        **kwargs: Any,
     ) -> ProviderResponse:
         citations = citations or []
         effective_timeout = timeout if timeout is not None else self._timeout
@@ -87,15 +89,19 @@ class OllamaProvider(BaseLLMProvider):
         messages.append({"role": "user", "content": prompt})
 
         num_predict = max_tokens if max_tokens is not None else 2048
+        options: Dict[str, Any] = {
+            "num_predict": num_predict,
+            "temperature": 0.7,
+        }
+        if repeat_penalty is not None:
+            options["repeat_penalty"] = repeat_penalty
+
         payload = {
             "model": self._model_name,
             "messages": messages,
             "stream": False,
             "keep_alive": "30m",
-            "options": {
-                "num_predict": num_predict,
-                "temperature": 0.7,
-            },
+            "options": options,
         }
 
         start_time = time.perf_counter()

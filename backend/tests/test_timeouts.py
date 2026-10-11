@@ -89,7 +89,7 @@ async def test_essay_skill_uses_dedicated_timeout(mock_db):
     mock_provider.provider_name = "ollama"
 
     mock_resp = MagicMock()
-    mock_resp.content = "# Scaled Product Growth\n\n" + ("A structured executive framework for scaling loops. " * 100)
+    mock_resp.content = "# Scaled Product Growth\n\n" + ("A structured executive framework for scaling loops. " * 180)
     mock_resp.model = "qwen2.5:3b"
     mock_resp.provider = "ollama"
     mock_resp.eval_count = 1200

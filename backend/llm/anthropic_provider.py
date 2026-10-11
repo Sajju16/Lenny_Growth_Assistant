@@ -86,6 +86,8 @@ class AnthropicProvider(BaseLLMProvider):
         timeout: Optional[float] = None,
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
+        repeat_penalty: Optional[float] = None,
+        **kwargs: Any,
     ) -> ProviderResponse:
         citations = citations or []
         api_key = self._ensure_api_key()
@@ -129,9 +131,10 @@ class AnthropicProvider(BaseLLMProvider):
 
         try:
             client = anthropic.AsyncAnthropic(api_key=api_key)
+            eff_max_tokens = max_tokens if max_tokens is not None else 2500
             response = await client.messages.create(
                 model=self._model_name,
-                max_tokens=1500,
+                max_tokens=eff_max_tokens,
                 system=system_instruction,
                 messages=messages,
             )

@@ -61,6 +61,8 @@ class BaseLLMProvider(ABC):
         timeout: Optional[float] = None,
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
+        repeat_penalty: Optional[float] = None,
+        **kwargs: Any,
     ) -> ProviderResponse:
         """
         Generates a grounded response based on user prompt, history, and retrieved context.

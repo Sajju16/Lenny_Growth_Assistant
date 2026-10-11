@@ -215,7 +215,7 @@ async def test_essay_skill_forwards_system_prompt():
         raw_chunks=[{"text": "Positioning context"}],
     )
 
-    full_draft = ("Word " * 700) # >= 600 words to avoid bounded enrichment pass
+    full_draft = ("Word " * 1200) # >= 1100 words to avoid bounded enrichment pass
     mock_provider = MagicMock()
     mock_provider.model_name = "qwen2.5:3b"
     mock_provider.provider_name = "ollama"
@@ -236,6 +236,8 @@ async def test_essay_skill_forwards_system_prompt():
     _, kwargs = mock_provider.generate_response.call_args
     assert kwargs.get("system_prompt") == SHIP30_SYSTEM_PROMPT
     assert kwargs.get("timeout") == 420.0
+    assert kwargs.get("max_tokens") == 2200
+    assert kwargs.get("repeat_penalty") == 1.15
 
 
 @pytest.mark.anyio
@@ -276,8 +278,8 @@ async def test_essay_skill_bounded_enrichment_when_under_word_threshold():
 
 @pytest.mark.anyio
 async def test_essay_skill_skips_enrichment_when_over_threshold():
-    """Verify bounded enrichment does NOT trigger if draft is already >= 600 words."""
-    long_draft = ("Word " * 650) # 650 words
+    """Verify bounded enrichment does NOT trigger if draft is already >= 1100 words."""
+    long_draft = ("Word " * 1200) # 1200 words (within 1,150-1,350 range)
 
     mock_retriever = MagicMock()
     mock_retriever.retrieve.return_value = RetrievalResult(
@@ -305,7 +307,18 @@ async def test_essay_skill_skips_enrichment_when_over_threshold():
 
     # Exactly one call
     assert mock_provider.generate_response.call_count == 1
-    assert res.word_count >= 600
+    assert res.word_count >= 1100
+
+
+def test_essay_skill_word_count_target_instructions():
+    """Verify that SHIP30_SYSTEM_PROMPT provides explicit target range, section completion, and anti-repetition rules."""
+    from skills.essay_skill import SHIP30_SYSTEM_PROMPT
+    assert "1,150–1,350 words" in SHIP30_SYSTEM_PROMPT or "1,150-1,350 words" in SHIP30_SYSTEM_PROMPT
+    assert "1,250 words" in SHIP30_SYSTEM_PROMPT
+    assert "The Monday Morning Action Plan" in SHIP30_SYSTEM_PROMPT
+    assert "Conclusion: The Compounding Advantage" in SHIP30_SYSTEM_PROMPT
+    assert "CRITICAL ANTI-REPETITION" in SHIP30_SYSTEM_PROMPT
+    assert "Prioritize completing every required section before expanding prose" in SHIP30_SYSTEM_PROMPT
 
 
 @pytest.mark.anyio
@@ -340,6 +353,50 @@ async def test_ollama_provider_payload_includes_num_predict():
 
     assert "options" in captured_payload
     assert captured_payload["options"]["num_predict"] == 2048
+
+
+@pytest.mark.anyio
+async def test_ollama_provider_payload_repeat_penalty_optional():
+    """Verify OllamaProvider sets repeat_penalty when passed, but omits it for regular chat requests."""
+    from llm.ollama_provider import OllamaProvider
+    import httpx
+
+    provider = OllamaProvider()
+    captured_payloads = []
+
+    async def mock_post(url, json=None, headers=None, timeout=None):
+        captured_payloads.append(json)
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "message": {"content": "Test response"},
+            "model": "qwen2.5:3b",
+            "eval_count": 50,
+            "total_duration": 1000000000,
+        }
+        return mock_resp
+
+    with patch("httpx.AsyncClient.post", side_effect=mock_post):
+        # 1. Standard chat request (no repeat_penalty)
+        await provider.generate_response(
+            prompt="Chat prompt",
+            history=[],
+            context_text="",
+            has_sufficient_context=True,
+        )
+        assert "repeat_penalty" not in captured_payloads[0]["options"]
+
+        # 2. Essay request with repeat_penalty
+        await provider.generate_response(
+            prompt="Essay prompt",
+            history=[],
+            context_text="",
+            has_sufficient_context=True,
+            repeat_penalty=1.15,
+            max_tokens=2200,
+        )
+        assert captured_payloads[1]["options"].get("repeat_penalty") == 1.15
+        assert captured_payloads[1]["options"].get("num_predict") == 2200
 
 
 def test_chat_endpoint_auto_routes_essay_intent_keywords(client_with_test_db):
