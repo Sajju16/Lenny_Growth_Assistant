@@ -83,6 +83,9 @@ class AnthropicProvider(BaseLLMProvider):
         context_text: str = "",
         citations: Optional[List[Citation]] = None,
         has_sufficient_context: bool = True,
+        timeout: Optional[float] = None,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
     ) -> ProviderResponse:
         citations = citations or []
         api_key = self._ensure_api_key()
@@ -112,7 +115,7 @@ class AnthropicProvider(BaseLLMProvider):
             )
 
         # Build prompt instructions and messages
-        system_instruction = GROUNDED_SYSTEM_PROMPT
+        system_instruction = system_prompt or GROUNDED_SYSTEM_PROMPT
         if context_text:
             system_instruction += f"\n\n--- RELEVANT TRANSCRIPT EVIDENCE ---\n{context_text}\n--- END OF EVIDENCE ---"
 

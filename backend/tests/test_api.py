@@ -96,3 +96,28 @@ def test_chat_insufficient_evidence(mock_retrieve):
     assert data["has_sufficient_context"] is False
     assert len(data["citations"]) == 0
     assert "insufficient evidence" in data["response"].lower()
+
+
+def test_chat_real_sourdough_croissants_unsupported():
+    """
+    Integration test with live retriever: 'How do I bake sourdough croissants?'
+    must fail closed at the evidence gate, returning an insufficient-evidence refusal
+    with an empty citation list and NO generated recipe.
+    """
+    payload = {
+        "message": "How do I bake sourdough croissants?",
+        "model": "qwen2.5:3b",
+        "history": [],
+        "use_rag": True,
+    }
+
+    response = client.post("/api/chat", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["has_sufficient_context"] is False
+    assert len(data["citations"]) == 0
+    assert "insufficient evidence" in data["response"].lower()
+    # Must NOT contain a fabricated croissant recipe
+    assert "butter" not in data["response"].lower()
+    assert "flour" not in data["response"].lower()
+    assert "knead" not in data["response"].lower()

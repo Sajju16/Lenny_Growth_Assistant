@@ -12,7 +12,10 @@ logger = logging.getLogger("lenny-growth-backend.llm.factory")
 SUPPORTED_PROVIDERS = ("ollama", "anthropic")
 
 
-def get_llm_provider(provider_name: Optional[str] = None) -> BaseLLMProvider:
+def get_llm_provider(
+    provider_name: Optional[str] = None,
+    timeout: Optional[float] = None,
+) -> BaseLLMProvider:
     """
     Factory resolving the requested or configured LLM provider.
     Priority:
@@ -23,7 +26,7 @@ def get_llm_provider(provider_name: Optional[str] = None) -> BaseLLMProvider:
     selected = (provider_name or os.getenv("LLM_PROVIDER", "ollama")).strip().lower()
 
     if selected == "ollama":
-        return OllamaProvider()
+        return OllamaProvider(timeout=timeout)
     elif selected == "anthropic":
         return AnthropicProvider()
     else:

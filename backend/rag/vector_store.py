@@ -19,18 +19,26 @@ class OllamaEmbeddingClient:
     def __init__(self, base_url: str = OLLAMA_BASE_URL, model: str = EMBEDDING_MODEL):
         self.base_url = base_url
         self.model = model
+        self._query_cache: Dict[str, List[float]] = {}
+        self._max_cache_size = 256
 
-    def get_embeddings(self, texts: List[str]) -> List[List[float]]:
+    def get_embeddings(self, texts: List[str], is_query: bool = False) -> List[List[float]]:
         """
         Generates 768-dim embeddings for a batch of strings using local Ollama nomic-embed-text.
+        Maintains keep_alive to prevent unnecessary model unloads on memory-constrained systems.
         """
         if not texts:
             return []
+
+        # If single query and cached, return immediately (0ms latency)
+        if is_query and len(texts) == 1 and texts[0] in self._query_cache:
+            return [self._query_cache[texts[0]]]
 
         url = f"{self.base_url}/api/embed"
         payload = {
             "model": self.model,
             "input": texts,
+            "keep_alive": "30m",
         }
 
         try:
@@ -42,6 +50,14 @@ class OllamaEmbeddingClient:
                 embeddings = data.get("embeddings", [])
                 if len(embeddings) != len(texts):
                     raise RuntimeError(f"Expected {len(texts)} embeddings, received {len(embeddings)}")
+
+                if is_query and len(texts) == 1:
+                    if len(self._query_cache) >= self._max_cache_size:
+                        # Evict oldest entry
+                        first_key = next(iter(self._query_cache))
+                        del self._query_cache[first_key]
+                    self._query_cache[texts[0]] = embeddings[0]
+
                 return embeddings
         except httpx.ConnectError:
             raise RuntimeError(f"Cannot connect to Ollama at {self.base_url}. Ensure Ollama is running.")
@@ -111,7 +127,7 @@ class VectorStore:
         """
         Embeds the query text and retrieves top_k most similar chunks.
         """
-        query_embedding = self.embedder.get_embeddings([query_text])[0]
+        query_embedding = self.embedder.get_embeddings([query_text], is_query=True)[0]
 
         results = self.collection.query(
             query_embeddings=[query_embedding],

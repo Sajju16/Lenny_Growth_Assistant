@@ -4,11 +4,18 @@ const API_BASE = import.meta.env.VITE_API_URL || '';
  * Helper to try the proxied endpoint first, falling back to direct port 8000
  */
 async function fetchWithFallback(endpoint, options = {}) {
-  const urls = [
-    `${API_BASE}${endpoint}`,
-    `http://localhost:8000${endpoint}`,
-    `http://127.0.0.1:8000${endpoint}`,
-  ];
+  const method = (options.method || 'GET').toUpperCase();
+  const isMutation = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
+
+  // For non-idempotent operations like chat or essay generation, only target the primary URL
+  // to avoid cascading duplicate inference tasks on CPU if a socket drops
+  const urls = isMutation
+    ? [`${API_BASE}${endpoint}`]
+    : [
+        `${API_BASE}${endpoint}`,
+        `http://localhost:8000${endpoint}`,
+        `http://127.0.0.1:8000${endpoint}`,
+      ];
 
   let lastError = null;
 
@@ -27,10 +34,13 @@ async function fetchWithFallback(endpoint, options = {}) {
       } catch {
         // use default status
       }
-      throw new Error(errorDetail);
+      const httpError = new Error(errorDetail);
+      httpError.status = res.status;
+      throw httpError;
     } catch (err) {
       lastError = err;
-      if (err.message && (err.message.includes('HTTP 502') || err.message.includes('HTTP 503') || err.message.includes('HTTP 504') || err.message.includes('Ollama'))) {
+      // Immediately surface HTTP status responses (504 timeout, 502 gateway, 400 bad request, etc.)
+      if (err.status || (err.message && (err.message.includes('HTTP') || err.message.includes('Ollama')))) {
         throw err;
       }
     }
@@ -112,7 +122,7 @@ export async function deleteConversation(conversationId) {
  */
 export async function sendChatMessage({
   message,
-  model = 'qwen2.5:3b',
+  model = null,
   provider = null,
   useAgent = false,
   history = [],
@@ -142,6 +152,123 @@ export async function sendChatMessage({
       artifact_title: artifactTitle,
     }),
   });
+}
+
+/**
+ * Stream a chat message with live token updates via SSE (/api/chat/stream)
+ */
+export async function streamChatMessage({
+  message,
+  model = null,
+  provider = null,
+  useAgent = false,
+  history = [],
+  useRag = true,
+  conversationId = null,
+  skill = null,
+  createArtifact = false,
+  artifactType = 'markdown',
+  artifactTitle = null,
+  onToken = () => {},
+  onMeta = () => {},
+}) {
+  const url = `${API_BASE}/api/chat/stream`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      message,
+      model,
+      provider,
+      use_agent: useAgent,
+      history,
+      use_rag: useRag,
+      conversation_id: conversationId,
+      skill,
+      create_artifact: createArtifact,
+      artifact_type: artifactType,
+      artifact_title: artifactTitle,
+    }),
+  });
+
+  if (!response.ok) {
+    let errorDetail = `HTTP ${response.status}`;
+    try {
+      const errJson = await response.json();
+      if (errJson?.detail) {
+        errorDetail = typeof errJson.detail === 'string' ? errJson.detail : JSON.stringify(errJson.detail);
+      }
+    } catch {}
+    const err = new Error(errorDetail);
+    err.status = response.status;
+    throw err;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+  let finalDoneData = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop() || '';
+
+    for (const part of parts) {
+      const lines = part.split('\n');
+      let currentEvent = 'message';
+      let currentData = '';
+
+      for (const line of lines) {
+        if (line.startsWith('event:')) {
+          currentEvent = line.replace('event:', '').trim();
+        } else if (line.startsWith('data:')) {
+          currentData = line.replace('data:', '').trim();
+        }
+      }
+
+      if (currentData) {
+        try {
+          const parsed = JSON.parse(currentData);
+          if (currentEvent === 'token') {
+            onToken(parsed.delta);
+          } else if (currentEvent === 'meta') {
+            onMeta(parsed);
+          } else if (currentEvent === 'done') {
+            finalDoneData = parsed;
+          } else if (currentEvent === 'error') {
+            throw new Error(parsed.error || 'Stream execution failed');
+          }
+        } catch (e) {
+          if (e.message?.includes('Stream execution failed')) throw e;
+        }
+      }
+    }
+  }
+
+  if (buffer.trim()) {
+    const lines = buffer.trim().split('\n');
+    let currentEvent = 'message';
+    let currentData = '';
+    for (const line of lines) {
+      if (line.startsWith('event:')) currentEvent = line.replace('event:', '').trim();
+      else if (line.startsWith('data:')) currentData = line.replace('data:', '').trim();
+    }
+    if (currentData) {
+      try {
+        const parsed = JSON.parse(currentData);
+        if (currentEvent === 'done') finalDoneData = parsed;
+        else if (currentEvent === 'token') onToken(parsed.delta);
+      } catch {}
+    }
+  }
+
+  return finalDoneData;
 }
 
 /**

@@ -1,30 +1,31 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Sidebar 
+import {
+  Sidebar
 } from './components/Sidebar';
-import { 
-  ChatHeader 
+import {
+  ChatHeader
 } from './components/ChatHeader';
-import { 
-  ChatMessage 
+import {
+  ChatMessage
 } from './components/ChatMessage';
-import { 
-  MessageComposer 
+import {
+  MessageComposer
 } from './components/MessageComposer';
-import { 
-  ArtifactViewer 
+import {
+  ArtifactViewer
 } from './components/ArtifactViewer';
-import { 
-  mockConversations 
+import {
+  mockConversations
 } from './data/mockConversations';
-import { 
-  mockArtifacts 
+import {
+  mockArtifacts
 } from './data/mockArtifacts';
-import { 
-  mockModels 
+import {
+  mockModels
 } from './data/mockModels';
-import { 
+import {
   sendChatMessage,
+  streamChatMessage,
   checkBackendHealth,
   listConversations,
   getConversation,
@@ -33,11 +34,11 @@ import {
   deleteConversation,
   getArtifact,
 } from './services/api';
-import { 
-  PanelRightOpen, 
-  PanelRightClose, 
-  Edit3, 
-  Check, 
+import {
+  PanelRightOpen,
+  PanelRightClose,
+  Edit3,
+  Check,
   Sparkles,
   ArrowRight,
   Database,
@@ -78,18 +79,35 @@ function formatDbMessageForUi(msg) {
 
 export default function App() {
   const [conversations, setConversations] = useState(mockConversations);
-  const [activeConversationId, setActiveConversationId] = useState('first-100-customers');
+  const [activeConversationId, setActiveConversationId] = useState(() => {
+    return localStorage.getItem('lenny_active_conv') || 'first-100-customers';
+  });
   const [selectedModelId, setSelectedModelId] = useState(mockModels[0].id); // 'qwen2.5:3b'
   const [isArtifactOpen, setIsArtifactOpen] = useState(true);
   const [activeArtifact, setActiveArtifact] = useState(mockArtifacts['artifact-first-100']);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isDesktopSidebarCollapsed, setIsDesktopSidebarCollapsed] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingSeconds, setLoadingSeconds] = useState(0);
+  const [isEssayGeneration, setIsEssayGeneration] = useState(false);
   const [backendHealth, setBackendHealth] = useState({ connected: false, checking: true });
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editedTitle, setEditedTitle] = useState('');
 
   const chatStreamRef = useRef(null);
+
+  // Track progress timer during active inference
+  useEffect(() => {
+    let interval;
+    if (isLoading) {
+      interval = setInterval(() => {
+        setLoadingSeconds((prev) => prev + 1);
+      }, 1000);
+    } else {
+      setLoadingSeconds(0);
+    }
+    return () => clearInterval(interval);
+  }, [isLoading]);
 
   // Active conversation object
   const activeConversation = conversations.find((c) => c.id === activeConversationId) || conversations[0] || {
@@ -150,12 +168,33 @@ export default function App() {
               }
 
               if (detail.messages) {
+                const uiMessages = detail.messages.map(formatDbMessageForUi);
+                const assistantWithModel = detail.messages.filter((m) => m.role === 'assistant' && m.model);
+                if (assistantWithModel.length > 0) {
+                  const lastUsedModel = assistantWithModel[assistantWithModel.length - 1].model;
+                  if (mockModels.some((m) => m.id === lastUsedModel)) {
+                    setSelectedModelId(lastUsedModel);
+                  }
+                }
+                const lastDbMsg = detail.messages[detail.messages.length - 1];
+                if (lastDbMsg && lastDbMsg.role === 'user') {
+                  uiMessages.push({
+                    id: `interrupted-${lastDbMsg.id}`,
+                    sender: 'assistant',
+                    authorName: 'Lenny Assistant',
+                    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                    isError: true,
+                    isTimeout: false,
+                    originalPrompt: lastDbMsg.content,
+                    content: 'Generation was interrupted before completion (such as by a browser refresh). You can retry or re-generate below.',
+                  });
+                }
                 setConversations((prev) =>
                   prev.map((c) =>
                     c.id === targetId
                       ? {
                           ...c,
-                          messages: detail.messages.map(formatDbMessageForUi),
+                          messages: uiMessages,
                           artifactId: detail.artifact_id,
                         }
                       : c
@@ -263,6 +302,27 @@ export default function App() {
         }
 
         if (detail.messages) {
+          const uiMessages = detail.messages.map(formatDbMessageForUi);
+          const assistantWithModel = detail.messages.filter((m) => m.role === 'assistant' && m.model);
+          if (assistantWithModel.length > 0) {
+            const lastUsedModel = assistantWithModel[assistantWithModel.length - 1].model;
+            if (mockModels.some((m) => m.id === lastUsedModel)) {
+              setSelectedModelId(lastUsedModel);
+            }
+          }
+          const lastDbMsg = detail.messages[detail.messages.length - 1];
+          if (lastDbMsg && lastDbMsg.role === 'user') {
+            uiMessages.push({
+              id: `interrupted-${lastDbMsg.id}`,
+              sender: 'assistant',
+              authorName: 'Lenny Assistant',
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              isError: true,
+              isTimeout: false,
+              originalPrompt: lastDbMsg.content,
+              content: 'Generation was interrupted before completion (such as by a browser refresh). You can retry or re-generate below.',
+            });
+          }
           setConversations((prev) =>
             prev.map((c) =>
               c.id === id
@@ -271,7 +331,7 @@ export default function App() {
                     title: detail.title,
                     category: detail.category,
                     artifactId: detail.artifact_id,
-                    messages: detail.messages.map(formatDbMessageForUi),
+                    messages: uiMessages,
                   }
                 : c
             )
@@ -374,10 +434,31 @@ export default function App() {
   const handleSendMessage = async (text, attachment, options = {}) => {
     if (!text?.trim()) return;
 
-    const isEssayCommand = text.startsWith('/essay') || text.startsWith('@essay') || options?.skill === 'essay';
+    const isEssayCommand = Boolean(
+      text.startsWith('/essay') ||
+      text.startsWith('@essay') ||
+      options?.skill === 'essay' ||
+      options?.isEssay ||
+      /^\s*(?:write|generate)\s+(?:an?\s+)?(?:ship\s*30\s*(?:for\s*30)?\s+)?essay\b/i.test(text)
+    );
     const cleanText = (text.startsWith('/essay') || text.startsWith('@essay'))
       ? text.replace(/^(\/essay|@essay)\s*/i, '').trim()
       : text;
+
+    setIsEssayGeneration(Boolean(isEssayCommand));
+
+    const currentMessages = activeConversation.messages || [];
+
+    // Filter out previous trailing error messages if retrying
+    const baseMessages = options?.isRetry
+      ? currentMessages.filter((m) => !m.isError)
+      : currentMessages;
+
+    // Check if the last message in baseMessages is already an identical user prompt
+    const lastMsg = baseMessages[baseMessages.length - 1];
+    const isDuplicateUserPrompt = Boolean(
+      options?.isRetry && lastMsg && lastMsg.sender === 'user' && lastMsg.content === cleanText
+    );
 
     const userMessage = {
       id: `usr-${Date.now()}`,
@@ -388,11 +469,12 @@ export default function App() {
       content: attachment ? `${cleanText}\n[Attached: ${attachment}]` : cleanText
     };
 
-    const currentMessages = activeConversation.messages || [];
-    const updatedMessagesWithUser = [...currentMessages, userMessage];
+    const updatedMessagesWithUser = isDuplicateUserPrompt
+      ? baseMessages
+      : [...baseMessages, userMessage];
 
     // If it was a new empty chat, update title
-    const newTitle = currentMessages.length === 0
+    const newTitle = baseMessages.length === 0
       ? (cleanText.length > 32 ? cleanText.slice(0, 32) + '...' : cleanText)
       : activeConversation.title;
 
@@ -407,78 +489,172 @@ export default function App() {
     setIsLoading(true);
 
     // Prepare conversation history for the backend
-    const historyPayload = currentMessages
+    const historyPayload = baseMessages
       .filter((m) => !m.isError)
       .map((m) => ({
         role: m.sender === 'user' ? 'user' : 'assistant',
         content: m.content || m.contentIntro || ''
       }));
 
+    const selectedModelObj = mockModels.find((m) => m.id === selectedModelId) || mockModels[0];
+    const canStream = !isEssayCommand && !options?.createArtifact && !selectedModelObj.useAgent;
+
     try {
-      // Real FastAPI POST /api/chat with active conversation_id and provider selection
-      const selectedModelObj = mockModels.find((m) => m.id === selectedModelId) || mockModels[0];
-      const res = await sendChatMessage({
-        message: cleanText,
-        model: selectedModelObj.useAgent ? null : selectedModelId,
-        provider: selectedModelObj.providerType,
-        useAgent: Boolean(selectedModelObj.useAgent),
-        history: historyPayload,
-        conversationId: activeConversationId,
-        skill: isEssayCommand ? 'essay' : (options?.skill || null),
-        createArtifact: Boolean(options?.createArtifact),
-        artifactType: options?.artifactType || 'markdown',
-      });
+      if (canStream) {
+        // --- Live SSE Streaming Path ---
+        const assistantMessageId = `asst-${Date.now()}`;
+        const providerBadge = selectedModelObj.providerType === 'anthropic' ? 'Anthropic Cloud' : 'Ollama Local';
 
-      if (res.artifact) {
-        setActiveArtifact(res.artifact);
-        setIsArtifactOpen(true);
+        const initialAssistantMessage = {
+          id: assistantMessageId,
+          sender: 'assistant',
+          authorName: 'Lenny Assistant',
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          isReal: true,
+          model: selectedModelId,
+          content: '',
+          isStreaming: true,
+          citations: [],
+          hasSufficientContext: true,
+          footerInfo: `${providerBadge} (${selectedModelId}) · Streaming live`,
+        };
+
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === activeConversationId
+              ? { ...c, title: newTitle, messages: [...updatedMessagesWithUser, initialAssistantMessage] }
+              : c
+          )
+        );
+
+        let streamedContent = '';
+        const res = await streamChatMessage({
+          message: cleanText,
+          model: selectedModelId,
+          provider: selectedModelObj.providerType,
+          useAgent: false,
+          history: historyPayload,
+          conversationId: activeConversationId,
+          skill: null,
+          onToken: (token) => {
+            streamedContent += token;
+            setConversations((prev) =>
+              prev.map((c) => {
+                if (c.id !== activeConversationId) return c;
+                const msgs = (c.messages || []).map((m) =>
+                  m.id === assistantMessageId
+                    ? { ...m, content: streamedContent }
+                    : m
+                );
+                return { ...c, messages: msgs };
+              })
+            );
+            if (chatStreamRef.current) {
+              chatStreamRef.current.scrollTop = chatStreamRef.current.scrollHeight;
+            }
+          },
+        });
+
+        const finalAssistantMessage = {
+          id: assistantMessageId,
+          sender: 'assistant',
+          authorName: 'Lenny Assistant',
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          isReal: true,
+          model: res?.model || selectedModelId,
+          content: res?.response || streamedContent,
+          citations: res?.citations || [],
+          hasSufficientContext: res?.has_sufficient_context !== false,
+          evalCount: res?.eval_count,
+          totalDuration: res?.total_duration,
+          isStreaming: false,
+          footerInfo: res?.citations?.length
+            ? `${res.citations.length} verified citation${res.citations.length > 1 ? 's' : ''} · ${providerBadge} (${res?.model || selectedModelId})`
+            : `${providerBadge} (${res?.model || selectedModelId}) · Strict grounding`,
+        };
+
+        setConversations((prev) =>
+          prev.map((c) => {
+            if (c.id !== activeConversationId) return c;
+            const msgs = (c.messages || []).map((m) =>
+              m.id === assistantMessageId ? finalAssistantMessage : m
+            );
+            return { ...c, messages: msgs };
+          })
+        );
+      } else {
+        // --- Standard / Non-streaming Path (Essay Skill or Agent Mode) ---
+        setIsLoading(true);
+        const res = await sendChatMessage({
+          message: cleanText,
+          model: selectedModelObj.useAgent ? null : selectedModelId,
+          provider: selectedModelObj.providerType,
+          useAgent: Boolean(selectedModelObj.useAgent),
+          history: historyPayload,
+          conversationId: activeConversationId,
+          skill: isEssayCommand ? 'essay' : (options?.skill || null),
+          createArtifact: Boolean(options?.createArtifact),
+          artifactType: options?.artifactType || 'markdown',
+        });
+
+        if (res.artifact) {
+          setActiveArtifact(res.artifact);
+          setIsArtifactOpen(true);
+        }
+
+        const providerBadge = isEssayCommand
+          ? 'Ship 30 for 30 Essay'
+          : res.provider === 'anthropic'
+          ? 'Anthropic Cloud'
+          : res.provider === 'anthropic-agent'
+          ? 'Claude Agent'
+          : 'Ollama Local';
+
+        const assistantMessage = {
+          id: `asst-${Date.now()}`,
+          sender: 'assistant',
+          authorName: 'Lenny Assistant',
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          isReal: true,
+          model: res.model || selectedModelId,
+          content: res.response,
+          citations: res.citations || [],
+          hasSufficientContext: res.has_sufficient_context,
+          evalCount: res.eval_count,
+          totalDuration: res.total_duration,
+          artifactId: res.artifact_id || (res.artifact ? res.artifact.id : undefined),
+          footerInfo: res.citations?.length
+              ? `${res.citations.length} verified citation${res.citations.length > 1 ? 's' : ''} · ${providerBadge} (${res.model || selectedModelId})`
+              : `${providerBadge} (${res.model || selectedModelId}) · Strict grounding`,
+        };
+
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === activeConversationId
+              ? {
+                  ...c,
+                  artifactId: res.artifact_id || c.artifactId,
+                  messages: [...updatedMessagesWithUser, assistantMessage]
+                }
+              : c
+          )
+        );
       }
-
-      const providerBadge = isEssayCommand
-        ? 'Ship 30 for 30 Essay'
-        : res.provider === 'anthropic'
-        ? 'Anthropic Cloud'
-        : res.provider === 'anthropic-agent'
-        ? 'Claude Agent'
-        : 'Ollama Local';
-
-      const assistantMessage = {
-        id: `asst-${Date.now()}`,
-        sender: 'assistant',
-        authorName: 'Lenny Assistant',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        isReal: true,
-        model: res.model || selectedModelId,
-        content: res.response,
-        citations: res.citations || [],
-        hasSufficientContext: res.has_sufficient_context,
-        evalCount: res.eval_count,
-        totalDuration: res.total_duration,
-        artifactId: res.artifact_id || (res.artifact ? res.artifact.id : undefined),
-        footerInfo: res.citations?.length
-          ? `${res.citations.length} verified citation${res.citations.length > 1 ? 's' : ''} · ${providerBadge} (${res.model || selectedModelId})`
-          : `${providerBadge} (${res.model || selectedModelId}) · Strict grounding`,
-      };
-
-      setConversations((prev) =>
-        prev.map((c) =>
-          c.id === activeConversationId
-            ? { 
-                ...c, 
-                artifactId: res.artifact_id || c.artifactId,
-                messages: [...updatedMessagesWithUser, assistantMessage] 
-              }
-            : c
-        )
-      );
     } catch (err) {
       console.error('Failed to get response from backend:', err);
+      const isTimeout = Boolean(
+        err.message?.includes('timed out') ||
+        err.message?.includes('504') ||
+        err.status === 504
+      );
       const errorMessage = {
         id: `err-${Date.now()}`,
         sender: 'assistant',
         authorName: 'Lenny Assistant',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         isError: true,
+        isTimeout,
+        isEssay: isEssayCommand,
         originalPrompt: cleanText,
         content: err.message || 'Failed to communicate with FastAPI backend or local Ollama runtime.',
       };
@@ -492,6 +668,7 @@ export default function App() {
       );
     } finally {
       setIsLoading(false);
+      setIsEssayGeneration(false);
     }
   };
 
@@ -667,19 +844,39 @@ export default function App() {
                     key={msg.id}
                     message={msg}
                     onOpenArtifact={handleOpenArtifact}
-                    onRetry={(prompt) => handleSendMessage(prompt, null)}
+                    onRetry={(prompt, retryOpts) => handleSendMessage(prompt, null, { isRetry: true, ...retryOpts })}
                   />
                 ))}
 
-                {/* Loading / Thinking Indicator */}
+                {/* Loading / Progress Indicator with Multi-Phase Timer Feedback */}
                 {isLoading && (
                   <div className="flex items-start gap-space-md animate-in fade-in duration-200">
                     <div className="w-8 h-8 rounded-lg bg-surface-container-lowest p-1 flex items-center justify-center shrink-0 shadow-sm border border-surface-container-high">
                       <Sparkles className="w-4 h-4 text-primary animate-spin" />
                     </div>
-                    <div className="p-4 rounded-xl bg-surface-container-lowest border border-[#EAEAE7] shadow-[0_1px_4px_rgba(0,0,0,0.02)] flex items-center gap-3 text-[13.5px] text-on-surface-variant">
-                      <span className="w-2 h-2 rounded-full bg-primary animate-ping" />
-                      <span>Generating strategic analysis via Ollama ({selectedModelId})...</span>
+                    <div className="p-4 rounded-xl bg-surface-container-lowest border border-[#EAEAE7] shadow-[0_1px_4px_rgba(0,0,0,0.02)] space-y-1.5 text-[13.5px] text-on-surface-variant flex-1 max-w-lg">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2 font-medium text-on-surface">
+                          <span className="w-2 h-2 rounded-full bg-primary animate-ping" />
+                          <span>
+                            {isEssayGeneration
+                              ? loadingSeconds < 15
+                                ? 'Phase 1/3: Retrieving transcript evidence & verified guest citations...'
+                                : loadingSeconds < 90
+                                ? 'Phase 2/3: Model prefill & structuring Ship 30 narrative arc...'
+                                : 'Phase 3/3: Generating full ~1,250-word deep-dive sections on CPU...'
+                              : 'Synthesizing Strategic Analysis'}
+                          </span>
+                        </div>
+                        <span className="font-mono text-[12px] bg-surface-container px-2 py-0.5 rounded text-primary font-semibold">
+                          {loadingSeconds}s / {isEssayGeneration ? '420s' : '180s'}
+                        </span>
+                      </div>
+                      <p className="text-[12px] text-outline leading-relaxed">
+                        {isEssayGeneration
+                          ? 'Local Qwen 2.5 3B CPU inference on 2-core i3 (~2.4 tokens/s measured). Full ~1,250-word target bounded by 420s timeout budget.'
+                          : `Grounding via Lenny's transcripts and Ollama (${selectedModelId}). Bounded by 180s timeout.`}
+                      </p>
                     </div>
                   </div>
                 )}

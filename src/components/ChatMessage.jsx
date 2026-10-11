@@ -212,27 +212,40 @@ export function ChatMessage({ message, onOpenArtifact, onRetry }) {
                 <AlertTriangle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
                 <div className="space-y-1">
                   <h4 className="font-semibold text-[14px] text-red-900">
-                    Ollama Backend Request Failed
+                    {message.isTimeout ? 'Local Inference Timeout (Bounded Wait Reached)' : 'Ollama Backend Request Failed'}
                   </h4>
                   <p className="text-[13.5px] leading-relaxed text-red-700 whitespace-pre-wrap">
                     {message.content}
                   </p>
+                  {message.isTimeout && (
+                    <div className="mt-2 p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-[12.5px] space-y-1">
+                      <div className="font-semibold flex items-center gap-1.5 text-amber-800">
+                        <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                        Hardware & Throughput Analysis (Measured)
+                      </div>
+                      <p className="text-amber-700 leading-relaxed">
+                        Local CPU inference on dual-core Intel Core i3 generates at measured ~2.3–2.7 tokens/s. Generating the complete ~1,250-word essay (~1,650 output tokens) requires ~11–13 minutes, reaching the 420s safety timeout. For instant generation of the full essay, configure <code className="bg-amber-100 px-1 py-0.5 rounded font-mono text-[11.5px]">ANTHROPIC_API_KEY</code> in <code className="bg-amber-100 px-1 py-0.5 rounded font-mono text-[11.5px]">backend/.env</code> and select <strong>Claude 3.5 Sonnet</strong> in the model selector.
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 pt-2 border-t border-red-200">
+              <div className="flex items-center gap-3 pt-2 border-t border-red-200 flex-wrap">
                 {onRetry && (
                   <button
                     type="button"
-                    onClick={() => onRetry(message.originalPrompt || '')}
+                    onClick={() => onRetry(message.originalPrompt || '', { isRetry: true, isEssay: message.isEssay })}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 text-white text-[12.5px] font-medium hover:bg-red-700 transition-colors shadow-sm"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
-                    Retry Query
+                    <span>{message.isTimeout ? 'Retry Generation' : 'Retry Query'}</span>
                   </button>
                 )}
                 <span className="text-[12px] text-red-600">
-                  Ensure FastAPI (`http://localhost:8000`) and Ollama (`http://localhost:11434`) are active.
+                  {message.isTimeout
+                    ? 'Retrying will not create duplicate messages in database.'
+                    : 'Ensure FastAPI (`http://localhost:8000`) and Ollama are active.'}
                 </span>
               </div>
             </div>
@@ -247,6 +260,16 @@ export function ChatMessage({ message, onOpenArtifact, onRetry }) {
               {message.content && (
                 <div className="space-y-3">
                   {renderMultiParagraphText(message.content)}
+                  {message.isStreaming && (
+                    <span className="inline-block w-2 h-4 ml-1 bg-primary animate-pulse align-middle rounded-sm" />
+                  )}
+                </div>
+              )}
+
+              {message.isStreaming && !message.content && (
+                <div className="flex items-center gap-2 text-[13.5px] text-on-surface-variant italic py-1">
+                  <span className="w-2 h-2 rounded-full bg-primary animate-ping" />
+                  <span>Synthesizing transcript evidence...</span>
                 </div>
               )}
 
@@ -311,8 +334,11 @@ export function ChatMessage({ message, onOpenArtifact, onRetry }) {
                             </div>
 
                             <div className="flex items-center gap-2 shrink-0">
-                              <span className="font-mono text-[11px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded">
-                                {matchPct}% match
+                              <span
+                                className="font-mono text-[11px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded"
+                                title="Vector retrieval cosine similarity"
+                              >
+                                {matchPct}% similarity
                               </span>
 
                               {cite.youtube_url && (

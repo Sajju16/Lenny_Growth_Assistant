@@ -5,15 +5,13 @@ from rag.retriever import Citation
 
 
 GROUNDED_SYSTEM_PROMPT = (
-    "You are Lenny Growth Assistant, an executive product intelligence advisor. "
-    "Your objective is to answer the user's question strictly and accurately based on the "
-    "verified transcript excerpts provided from Lenny's Podcast archives.\n\n"
-    "CRITICAL GROUNDING INSTRUCTIONS:\n"
-    "1. Base your response SOLELY on the transcript excerpts provided below. Do not guess or invent facts.\n"
-    "2. If the provided excerpts do not contain enough relevant information to answer with confidence, "
-    "you MUST explicitly state: 'Based on the verified podcast transcripts currently indexed, there is insufficient evidence to answer this question.'\n"
-    "3. Directly cite and attribute advice, playbooks, and frameworks to the specific guest(s) named in the excerpts.\n"
-    "4. Format your advice with crisp executive structure, bold key concepts, and numbered points."
+    "You are Lenny Growth Assistant, an executive product advisor answering strictly from "
+    "verified Lenny's Podcast transcript excerpts.\n\n"
+    "CRITICAL GROUNDING RULES:\n"
+    "1. Support every claim with direct evidence from the supplied transcript excerpts. Do not fabricate quotations, guest advice, episode details, or citations.\n"
+    "2. Distinguish direct guest recommendations from general inference. Clearly attribute specific insights to the named guest(s).\n"
+    "3. If the excerpts do not contain sufficient evidence to support a requested claim, explicitly state: 'Based on the verified podcast transcripts currently indexed, there is insufficient evidence to answer this question.'\n"
+    "4. Format your response with crisp executive structure, bold key concepts, and numbered takeaways."
 )
 
 
@@ -60,11 +58,54 @@ class BaseLLMProvider(ABC):
         context_text: str = "",
         citations: Optional[List[Citation]] = None,
         has_sufficient_context: bool = True,
+        timeout: Optional[float] = None,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
     ) -> ProviderResponse:
         """
         Generates a grounded response based on user prompt, history, and retrieved context.
         """
         pass
+
+    async def stream_response(
+        self,
+        prompt: str,
+        history: List[Dict[str, str]],
+        context_text: str = "",
+        citations: Optional[List[Citation]] = None,
+        has_sufficient_context: bool = True,
+        timeout: Optional[float] = None,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ):
+        """
+        Asynchronously streams tokens as they are generated.
+        Yields chunk dictionaries:
+        - {"delta": str} during token generation
+        - {"done": True, "response": str, "citations": list, ...} upon completion.
+        """
+        resp = await self.generate_response(
+            prompt=prompt,
+            history=history,
+            context_text=context_text,
+            citations=citations,
+            has_sufficient_context=has_sufficient_context,
+            timeout=timeout,
+            system_prompt=system_prompt,
+            max_tokens=max_tokens,
+        )
+        yield {"delta": resp.content}
+        yield {
+            "done": True,
+            "response": resp.content,
+            "citations": resp.citations,
+            "has_sufficient_context": resp.has_sufficient_context,
+            "eval_count": resp.eval_count,
+            "total_duration": resp.total_duration,
+            "model": resp.model,
+            "provider": resp.provider,
+            "metadata": resp.metadata,
+        }
 
     @abstractmethod
     async def check_health(self) -> Dict[str, Any]:

@@ -1,15 +1,19 @@
 import os
+import re
+import json
+import time
 import logging
 from typing import List, Optional
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, status, BackgroundTasks, Depends
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import httpx
 from sqlalchemy.orm import Session
 
 from rag.vector_store import VectorStore, EMBEDDING_MODEL
-from rag.retriever import KnowledgeRetriever, Citation
+from rag.retriever import KnowledgeRetriever, Citation, align_citations_with_response
 from rag.ingest import run_ingestion
 
 from database.connection import get_db, init_db, check_db_health
@@ -45,17 +49,37 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "qwen2.5:3b")
 DEFAULT_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
 
-GROUNDED_SYSTEM_PROMPT = (
-    "You are Lenny Growth Assistant, an executive product intelligence advisor. "
-    "Your objective is to answer the user's question strictly and accurately based on the "
-    "verified transcript excerpts provided from Lenny's Podcast archives.\n\n"
-    "CRITICAL GROUNDING INSTRUCTIONS:\n"
-    "1. Base your response SOLELY on the transcript excerpts provided below. Do not guess or invent facts.\n"
-    "2. If the provided excerpts do not contain enough relevant information to answer with confidence, "
-    "you MUST explicitly state: 'Based on the verified podcast transcripts currently indexed, there is insufficient evidence to answer this question.'\n"
-    "3. Directly cite and attribute advice, playbooks, and frameworks to the specific guest(s) named in the excerpts.\n"
-    "4. Format your advice with crisp executive structure, bold key concepts, and numbered points."
-)
+# Maximum number of prior conversation turns forwarded to the LLM.
+# Each "turn" is one user message + one assistant reply = 2 items.
+# Capping at 4 items (2 full turns) keeps prompt tokens predictable
+# and prevents prompt-eval blowup on long sessions.
+_HISTORY_MAX_MESSAGES = 4
+
+
+def _truncate_history(history: list, max_messages: int = _HISTORY_MAX_MESSAGES) -> list:
+    """
+    Returns the latest `max_messages` items from `history`, preserving
+    chronological order.  If history is shorter or equal, it is returned
+    unchanged (no copy is made unless truncation is needed).
+
+    Args:
+        history: List of dicts with 'role'/'content' keys (or ChatMessageItem objects
+                 already converted via .dict()).
+        max_messages: Maximum number of history messages to keep. Defaults to
+                      _HISTORY_MAX_MESSAGES (4 = 2 user+assistant pairs).
+
+    Returns:
+        The (possibly truncated) history list.
+    """
+    if len(history) <= max_messages:
+        return history
+    truncated = history[-max_messages:]
+    logger.info(
+        "History truncated: keeping last %d of %d messages to limit prompt size.",
+        max_messages,
+        len(history),
+    )
+    return truncated
 
 app = FastAPI(
     title="Lenny Growth Assistant Backend",
@@ -208,6 +232,14 @@ async def health_check():
         "llm_provider": configured_provider,
         "active_provider": configured_provider,
         "active_model": active_model,
+        "default_model": active_model,
+        "configured_default_model": active_model,
+        "model_selection_policy": "per_request_override_supported",
+        "model_selection_note": (
+            "Endpoints (/api/chat, /api/chat/stream, /api/skills/essay) support per-request model overrides. "
+            "When 'model' is omitted from the request payload, the server defaults to active_model."
+        ),
+        "available_local_models": ollama_status["available_models"],
         "database": db_stats,
         "ollama": ollama_status,
         "anthropic": anthropic_status,
@@ -367,7 +399,8 @@ async def generate_essay_endpoint(payload: EssayRequest, db: Session = Depends(g
     a conversation message and as a dynamic Markdown artifact.
     """
     provider_name = (payload.provider or os.getenv("LLM_PROVIDER", "ollama")).strip().lower()
-    llm_provider = get_llm_provider(provider_name)
+    essay_timeout = float(os.getenv("OLLAMA_ESSAY_TIMEOUT", "420.0"))
+    llm_provider = get_llm_provider(provider_name, timeout=essay_timeout)
     if payload.model:
         llm_provider._model_name = payload.model
 
@@ -377,6 +410,7 @@ async def generate_essay_endpoint(payload: EssayRequest, db: Session = Depends(g
         retriever=retriever,
         conversation_id=payload.conversation_id,
         db=db,
+        timeout=essay_timeout,
     )
 
     artifact_obj = None
@@ -499,6 +533,8 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
         # Provider execution path
         llm_provider = get_llm_provider(provider_name)
         target_model = request.model or llm_provider.model_name
+        if target_model:
+            llm_provider._model_name = target_model
         logger.info(
             "Chat request via provider '%s' (model='%s', use_rag=%s, conv_id=%s)",
             provider_name,
@@ -514,30 +550,63 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
         if not conv:
             crud.create_conversation(db, ConversationCreate(id=conv_id, title="New Strategy Discussion"))
 
-        # Persist user message
-        crud.create_message(
-            db=db,
-            msg_in=MessageCreate(
-                conversation_id=conv_id,
-                role="user",
-                content=request.message,
-                model=target_model,
-            ),
+        # Deduplication check: if the last message in this session is an unanswered user message
+        # with identical content, reuse it rather than appending a duplicate entry into PostgreSQL.
+        last_msg = crud.get_last_message(db, conv_id)
+        is_duplicate = (
+            last_msg is not None
+            and last_msg.role == "user"
+            and last_msg.content.strip() == request.message.strip()
         )
+        if not is_duplicate:
+            crud.create_message(
+                db=db,
+                msg_in=MessageCreate(
+                    conversation_id=conv_id,
+                    role="user",
+                    content=request.message,
+                    model=target_model,
+                ),
+            )
+        else:
+            logger.info("Reusing existing user message (id=%s) to prevent duplicate insertion on retry", last_msg.id)
 
     # 2. Skill Execution Path (e.g. Ship 30 for 30 Essay Skill)
-    if request.skill in ("essay", "ship30"):
-        logger.info("Executing Ship 30 for 30 Essay Skill via /api/chat (conv_id=%s)", conv_id)
-        llm_provider = get_llm_provider(provider_name)
+    raw_prompt = request.message.strip()
+    is_essay_cmd = (
+        request.skill in ("essay", "ship30")
+        or raw_prompt.lower().startswith(("/essay", "@essay"))
+        or bool(re.search(r"^\s*(?:write|generate)\s+(?:an?\s+)?(?:ship\s*30\s*(?:for\s*30)?\s+)?essay\b", raw_prompt, re.IGNORECASE))
+    )
+
+    if is_essay_cmd:
+        # Extract clean essay topic
+        essay_topic = raw_prompt
+        if essay_topic.lower().startswith(("/essay", "@essay")):
+            essay_topic = re.sub(r"^(\/essay|@essay)\s*", "", essay_topic, flags=re.IGNORECASE).strip()
+        else:
+            essay_topic = re.sub(
+                r"^\s*(?:write|generate)\s+(?:an?\s+)?(?:ship\s*30\s*(?:for\s*30)?\s+)?essay\s+(?:on|about|for)?\s*",
+                "",
+                essay_topic,
+                flags=re.IGNORECASE,
+            ).strip()
+        if not essay_topic:
+            essay_topic = raw_prompt
+
+        logger.info("Executing Ship 30 for 30 Essay Skill via /api/chat (conv_id=%s, topic='%s')", conv_id, essay_topic)
+        essay_timeout = float(os.getenv("OLLAMA_ESSAY_TIMEOUT", "420.0"))
+        llm_provider = get_llm_provider(provider_name, timeout=essay_timeout)
         if target_model:
             llm_provider._model_name = target_model
 
         essay_res = await generate_ship30_essay(
-            topic=request.message,
+            topic=essay_topic,
             provider=llm_provider,
             retriever=retriever,
             conversation_id=conv_id,
             db=db,
+            timeout=essay_timeout,
         )
 
         artifact_obj = None
@@ -626,17 +695,21 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
     citations: List[Citation] = []
     has_sufficient_context = True
     context_block = ""
+    t0_req = time.perf_counter()
+    t_ret = 0.0
 
     # RAG Retrieval Step
     if request.use_rag:
         try:
-            retrieval_res = retriever.retrieve(query=request.message, top_k=4)
+            t0_ret = time.perf_counter()
+            retrieval_res = retriever.retrieve(query=request.message, top_k=2)
+            t_ret = time.perf_counter() - t0_ret
             citations = retrieval_res.citations
             has_sufficient_context = retrieval_res.has_sufficient_context
             context_block = retrieval_res.context_text
 
             if not has_sufficient_context:
-                logger.info("Insufficient evidence retrieved for: '%s'", request.message)
+                logger.info("Insufficient evidence retrieved in %.3fs for: '%s'", t_ret, request.message)
                 refusal_response = (
                     "Based on the verified podcast transcripts currently indexed in the knowledge base, "
                     "there is insufficient evidence to answer this question. Please ask about topics covered "
@@ -672,19 +745,38 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
                 detail=f"Knowledge retrieval error: {str(exc)}",
             )
 
-    # Invoke selected provider
+    # Invoke selected provider with sensible token bound for normal chat.
+    # Truncate history to the latest _HISTORY_MAX_MESSAGES items so that long
+    # sessions do not balloon prompt-eval time.
+    raw_history = [item.dict() for item in (request.history or [])]
+    bounded_history = _truncate_history(raw_history)
+    t0_llm = time.perf_counter()
     response_obj = await llm_provider.generate_response(
         prompt=request.message,
-        history=[item.dict() for item in (request.history or [])],
+        history=bounded_history,
         context_text=context_block,
         citations=citations,
         has_sufficient_context=has_sufficient_context,
+        max_tokens=384,
     )
+    t_llm = time.perf_counter() - t0_llm
+
+    # Align citations with claims in the generated response
+    response_obj.citations = align_citations_with_response(
+        citations=response_obj.citations,
+        response_text=response_obj.content,
+    )
+
+    # If the generated response acknowledges insufficient evidence, enforce clean empty citations
+    if "insufficient evidence" in response_obj.content.lower():
+        response_obj.has_sufficient_context = False
+        response_obj.citations = []
 
     artifact_id = None
     artifact_obj = None
 
     # Persist assistant response and optional artifact to database
+    t0_db = time.perf_counter()
     if conv_id:
         citation_dicts = [c.model_dump() if hasattr(c, "model_dump") else c.dict() for c in response_obj.citations]
 
@@ -723,6 +815,17 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
                 artifact_id=artifact_id,
             ),
         )
+    t_db = time.perf_counter() - t0_db
+    total_time = time.perf_counter() - t0_req
+
+    logger.info(
+        "Chat request finished: total=%.2fs (retrieval=%.2fs, llm=%.2fs, db=%.3fs, tokens=%s)",
+        total_time,
+        t_ret,
+        t_llm,
+        t_db,
+        response_obj.eval_count,
+    )
 
     return ChatResponse(
         response=response_obj.content,
@@ -736,6 +839,196 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
         artifact_id=artifact_id,
         artifact=artifact_obj,
         done=True,
+    )
+
+
+@app.post("/api/chat/stream")
+async def chat_stream_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
+    """
+    Streams generated tokens in realtime via Server-Sent Events (SSE).
+    Provides rapid Time-To-First-Token (TTFT < 1-2s) instead of blocking for full generation,
+    while persisting messages to PostgreSQL and applying strict citation alignment upon completion.
+    """
+    provider_name = (request.provider or os.getenv("LLM_PROVIDER", "ollama")).strip().lower()
+
+    if request.use_agent:
+        target_model = request.model or os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
+    else:
+        llm_provider = get_llm_provider(provider_name)
+        target_model = request.model or llm_provider.model_name
+        if target_model:
+            llm_provider._model_name = target_model
+
+    conv_id = request.conversation_id
+    if conv_id:
+        conv = crud.get_conversation(db, conv_id)
+        if not conv:
+            crud.create_conversation(db, ConversationCreate(id=conv_id, title="New Strategy Discussion"))
+
+        last_msg = crud.get_last_message(db, conv_id)
+        is_duplicate = (
+            last_msg is not None
+            and last_msg.role == "user"
+            and last_msg.content.strip() == request.message.strip()
+        )
+        if not is_duplicate:
+            crud.create_message(
+                db=db,
+                msg_in=MessageCreate(
+                    conversation_id=conv_id,
+                    role="user",
+                    content=request.message,
+                    model=target_model,
+                ),
+            )
+
+    async def event_generator():
+        t0_req = time.perf_counter()
+        citations: List[Citation] = []
+        has_sufficient_context = True
+        context_block = ""
+        t_ret = 0.0
+
+        # RAG Retrieval Step
+        if request.use_rag:
+            t0_ret = time.perf_counter()
+            retrieval_res = retriever.retrieve(query=request.message, top_k=2)
+            t_ret = time.perf_counter() - t0_ret
+            citations = retrieval_res.citations
+            has_sufficient_context = retrieval_res.has_sufficient_context
+            context_block = retrieval_res.context_text
+
+            if not has_sufficient_context:
+                refusal_response = (
+                    "Based on the verified podcast transcripts currently indexed in the knowledge base, "
+                    "there is insufficient evidence to answer this question. Please ask about topics covered "
+                    "in the indexed episodes (e.g. founder-led sales, positioning, PMF benchmarks, pricing architecture, or PLG loops)."
+                )
+                yield f"event: meta\ndata: {json.dumps({'has_sufficient_context': False, 'citations': []})}\n\n"
+                yield f"event: token\ndata: {json.dumps({'delta': refusal_response})}\n\n"
+
+                if conv_id:
+                    crud.create_message(
+                        db=db,
+                        msg_in=MessageCreate(
+                            conversation_id=conv_id,
+                            role="assistant",
+                            content=refusal_response,
+                            model=target_model,
+                            citations=[],
+                            has_sufficient_context=False,
+                        ),
+                    )
+
+                done_payload = {
+                    "response": refusal_response,
+                    "model": target_model,
+                    "provider": provider_name,
+                    "citations": [],
+                    "has_sufficient_context": False,
+                    "conversation_id": conv_id,
+                    "timing": {
+                        "retrieval_ms": round(t_ret * 1000, 1),
+                        "total_ms": round((time.perf_counter() - t0_req) * 1000, 1),
+                    },
+                }
+                yield f"event: done\ndata: {json.dumps(done_payload)}\n\n"
+                return
+
+        # Preliminary meta event
+        preliminary_citations = [
+            c.model_dump() if hasattr(c, "model_dump") else c.dict()
+            for c in citations
+        ]
+        yield f"event: meta\ndata: {json.dumps({'has_sufficient_context': True, 'citations': preliminary_citations, 'model': target_model, 'provider': provider_name})}\n\n"
+
+        full_response = ""
+        completion_metadata = {}
+
+        # Truncate history to the latest _HISTORY_MAX_MESSAGES items so that
+        # long sessions do not balloon prompt-eval time during streaming.
+        raw_history_stream = [item.dict() for item in (request.history or [])]
+        bounded_history_stream = _truncate_history(raw_history_stream)
+
+        try:
+            async for chunk in llm_provider.stream_response(
+                prompt=request.message,
+                history=bounded_history_stream,
+                context_text=context_block,
+                citations=citations,
+                has_sufficient_context=True,
+                max_tokens=384,
+            ):
+                if "delta" in chunk:
+                    delta = chunk["delta"]
+                    full_response += delta
+                    yield f"event: token\ndata: {json.dumps({'delta': delta})}\n\n"
+                elif chunk.get("done"):
+                    completion_metadata = chunk
+        except Exception as exc:
+            logger.error("Error during streaming generation: %s", exc)
+            yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
+            return
+
+        # Citation alignment with final response
+        final_citations = align_citations_with_response(
+            citations=citations,
+            response_text=full_response,
+        )
+
+        if "insufficient evidence" in full_response.lower():
+            final_has_sufficient = False
+            final_citations = []
+        else:
+            final_has_sufficient = True
+
+        final_citation_dicts = [
+            c.model_dump() if hasattr(c, "model_dump") else c.dict()
+            for c in final_citations
+        ]
+
+        # Persist assistant response to PostgreSQL
+        if conv_id:
+            crud.create_message(
+                db=db,
+                msg_in=MessageCreate(
+                    conversation_id=conv_id,
+                    role="assistant",
+                    content=full_response,
+                    model=completion_metadata.get("model", target_model),
+                    citations=final_citation_dicts,
+                    has_sufficient_context=final_has_sufficient,
+                    eval_count=completion_metadata.get("eval_count"),
+                    total_duration=completion_metadata.get("total_duration"),
+                ),
+            )
+
+        t_total = time.perf_counter() - t0_req
+        done_payload = {
+            "response": full_response,
+            "model": completion_metadata.get("model", target_model),
+            "provider": provider_name,
+            "citations": final_citation_dicts,
+            "has_sufficient_context": final_has_sufficient,
+            "eval_count": completion_metadata.get("eval_count"),
+            "total_duration": completion_metadata.get("total_duration"),
+            "conversation_id": conv_id,
+            "metadata": completion_metadata.get("metadata", {}),
+            "timing": {
+                "total_ms": round(t_total * 1000, 1),
+                "retrieval_ms": round(t_ret * 1000, 1),
+            },
+        }
+        yield f"event: done\ndata: {json.dumps(done_payload)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

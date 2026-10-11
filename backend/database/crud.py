@@ -211,3 +211,68 @@ def delete_artifact(db: Session, artifact_id: str) -> bool:
     db.commit()
     return True
 
+
+def get_last_message(db: Session, conversation_id: str) -> Optional[Message]:
+    """
+    Returns the most recent message in the specified conversation.
+    """
+    return (
+        db.query(Message)
+        .filter(Message.conversation_id == conversation_id)
+        .order_by(desc(Message.created_at))
+        .first()
+    )
+
+
+def get_conversation_artifact_by_filename(
+    db: Session, conversation_id: str, file_name: str
+) -> Optional[Artifact]:
+    """
+    Returns an artifact in the specified conversation with the given filename.
+    """
+    return (
+        db.query(Artifact)
+        .filter(
+            Artifact.conversation_id == conversation_id,
+            Artifact.file_name == file_name,
+        )
+        .first()
+    )
+
+
+def upsert_artifact(db: Session, artifact_in: ArtifactCreate) -> Artifact:
+    """
+    Creates an artifact or updates an existing one if the file_name already exists
+    for this conversation, preventing duplicate artifacts on retry attempts.
+    """
+    if artifact_in.conversation_id and artifact_in.file_name:
+        existing = get_conversation_artifact_by_filename(
+            db, artifact_in.conversation_id, artifact_in.file_name
+        )
+        if existing:
+            now = datetime.now(timezone.utc)
+            words = len(artifact_in.content.split())
+            read_mins = max(1, round(words / 225))
+            read_time_str = f"{read_mins} min read"
+
+            existing.title = artifact_in.title
+            existing.content = artifact_in.content
+            existing.subtitle = artifact_in.subtitle or existing.subtitle
+            existing.badge = artifact_in.badge or existing.badge
+            existing.word_count = artifact_in.word_count or words
+            existing.read_time = artifact_in.read_time or read_time_str
+            existing.citations = artifact_in.citations or existing.citations
+            existing.is_safe = artifact_in.is_safe if artifact_in.is_safe is not None else existing.is_safe
+            existing.security_warnings = artifact_in.security_warnings or existing.security_warnings
+            existing.updated_at = now
+
+            conv = get_conversation(db, artifact_in.conversation_id)
+            if conv:
+                conv.artifact_id = existing.id
+                conv.updated_at = now
+
+            db.commit()
+            db.refresh(existing)
+            return existing
+
+    return create_artifact(db, artifact_in)
