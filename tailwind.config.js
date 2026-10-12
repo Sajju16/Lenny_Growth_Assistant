@@ -77,9 +77,9 @@ export default {
         "space-xs": "0.25rem",
       },
       fontFamily: {
-        sans: ["Inter", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "sans-serif"],
-        headline: ["Inter", "sans-serif"],
-        body: ["Inter", "sans-serif"],
+        sans: ["Nunito", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "sans-serif"],
+        headline: ["Nunito", "sans-serif"],
+        body: ["Nunito", "sans-serif"],
         mono: ["JetBrains Mono", "monospace"],
       },
       fontSize: {
