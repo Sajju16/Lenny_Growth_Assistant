@@ -76,9 +76,9 @@ export function ChatMessage({ message, onOpenArtifact, onRetry }) {
       if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
         const lines = trimmed.split('\n');
         return (
-          <ul key={pIdx} className="space-y-1.5 pl-4 list-disc text-[14.5px] leading-relaxed text-on-surface">
+          <ul key={pIdx} className="space-y-2 pl-4 list-disc text-[15px] leading-[1.6] text-on-surface my-2">
             {lines.map((line, lIdx) => (
-              <li key={lIdx}>
+              <li key={lIdx} className="leading-[1.6]">
                 {renderFormattedParagraph(line.replace(/^[-*]\s+/, ''))}
               </li>
             ))}
@@ -89,9 +89,9 @@ export function ChatMessage({ message, onOpenArtifact, onRetry }) {
       if (/^\d+\.\s/.test(trimmed)) {
         const lines = trimmed.split('\n');
         return (
-          <ol key={pIdx} className="space-y-1.5 pl-4 list-decimal text-[14.5px] leading-relaxed text-on-surface">
+          <ol key={pIdx} className="space-y-2 pl-4 list-decimal text-[15px] leading-[1.6] text-on-surface my-2">
             {lines.map((line, lIdx) => (
-              <li key={lIdx}>
+              <li key={lIdx} className="leading-[1.6]">
                 {renderFormattedParagraph(line.replace(/^\d+\.\s+/, ''))}
               </li>
             ))}
@@ -100,7 +100,7 @@ export function ChatMessage({ message, onOpenArtifact, onRetry }) {
       }
 
       return (
-        <p key={pIdx} className="text-[14.5px] leading-relaxed text-on-surface whitespace-pre-line">
+        <p key={pIdx} className="text-[15px] leading-[1.6] text-on-surface whitespace-pre-line">
           {renderFormattedParagraph(trimmed)}
         </p>
       );
@@ -113,7 +113,7 @@ export function ChatMessage({ message, onOpenArtifact, onRetry }) {
         <div className="w-8 h-8 rounded-lg bg-inverse-surface text-inverse-on-surface flex items-center justify-center font-semibold text-[13px] shrink-0 shadow-sm">
           AK
         </div>
-        <div className="flex-1 space-y-1 min-w-0">
+        <div className="flex-1 space-y-1.5 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-semibold text-[13.5px] text-on-surface">
               {message.authorName || 'Alex Kim'}
@@ -126,7 +126,7 @@ export function ChatMessage({ message, onOpenArtifact, onRetry }) {
               {message.timestamp}
             </time>
           </div>
-          <div className="p-space-md rounded-xl bg-surface-container-lowest shadow-[0_1px_4px_rgba(0,0,0,0.02)] text-on-surface text-[15px] leading-relaxed border border-[#EAEAE7]">
+          <div className="p-space-md rounded-xl bg-surface-container-lowest shadow-[0_1px_4px_rgba(0,0,0,0.02)] text-on-surface text-[15px] leading-[1.6] border border-[#EAEAE7]">
             {message.content}
           </div>
         </div>
@@ -269,13 +269,13 @@ export function ChatMessage({ message, onOpenArtifact, onRetry }) {
           ) : (
             <>
               {message.contentIntro && (
-                <p className="text-[15px] leading-relaxed text-on-surface">
+                <p className="text-[15px] leading-[1.6] text-on-surface">
                   {renderFormattedParagraph(message.contentIntro)}
                 </p>
               )}
 
               {message.content && (
-                <div className="space-y-3">
+                <div className="space-y-3.5">
                   {renderMultiParagraphText(message.content)}
                   {message.isStreaming && (
                     <span className="inline-block w-2 h-4 ml-1 bg-primary animate-pulse align-middle rounded-sm" />
@@ -301,7 +301,7 @@ export function ChatMessage({ message, onOpenArtifact, onRetry }) {
                         </span>
                         {section.title}
                       </h3>
-                      <p className="text-[14px] text-on-surface-variant leading-relaxed">
+                      <p className="text-[14.5px] text-on-surface-variant leading-[1.6]">
                         {section.body}
                       </p>
                     </div>
@@ -311,7 +311,7 @@ export function ChatMessage({ message, onOpenArtifact, onRetry }) {
 
               {/* REAL RAG CITATIONS BLOCK */}
               {message.citations && message.citations.length > 0 && (
-                <div className="pt-3 border-t border-[#EAEAE7] space-y-2.5">
+                <div className="!mt-5 pt-4 border-t border-[#EAEAE7] space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-[11.5px] font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
                       <BookOpen className="w-3.5 h-3.5" />
@@ -322,7 +322,7 @@ export function ChatMessage({ message, onOpenArtifact, onRetry }) {
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 gap-2 pt-1">
+                  <div className="grid grid-cols-1 gap-2.5 pt-1">
                     {message.citations.map((cite, cIdx) => {
                       const isExpanded = !!expandedExcerpts[cIdx];
                       const matchPct = Math.round((cite.relevance_score || 0.8) * 100);
@@ -330,7 +330,7 @@ export function ChatMessage({ message, onOpenArtifact, onRetry }) {
                       return (
                         <div
                           key={cIdx}
-                          className="p-3 rounded-xl bg-surface-container-low border border-surface-container-high hover:border-primary/40 transition-colors space-y-1.5 text-left"
+                          className="p-3.5 rounded-xl bg-surface-container-low border border-surface-container-high hover:border-primary/40 transition-colors space-y-2 text-left shadow-[0_1px_2px_rgba(0,0,0,0.02)]"
                         >
                           <div className="flex items-start justify-between gap-2">
                             <div className="min-w-0">
@@ -376,7 +376,7 @@ export function ChatMessage({ message, onOpenArtifact, onRetry }) {
                           {/* Excerpt toggle */}
                           {cite.excerpt && (
                             <div className="pt-1">
-                              <p className={`text-[12px] text-outline font-serif italic border-l-2 border-primary/40 pl-2 py-0.5 leading-relaxed ${
+                              <p className={`text-[12.5px] text-outline font-serif italic border-l-2 border-primary/50 pl-2.5 py-0.5 leading-[1.6] ${
                                 isExpanded ? '' : 'line-clamp-2'
                               }`}>
                                 "{cite.excerpt}"

@@ -848,10 +848,10 @@ export default function App() {
             {/* Scrollable Chat Stream */}
             <div
               ref={chatStreamRef}
-              className="flex-1 overflow-y-auto px-4 sm:px-space-lg py-5 sm:py-space-xl space-y-6"
+              className="flex-1 overflow-y-auto px-4 sm:px-space-lg py-5 sm:py-space-xl space-y-5"
               id="chat-stream"
             >
-              <div className="max-w-[680px] mx-auto space-y-6">
+              <div className="max-w-[680px] mx-auto space-y-5">
                 {isInitialHydrating || loadingConvId === activeConversationId ? (
                   <div className="space-y-6 pt-4 animate-in fade-in duration-200">
                     <div className="flex items-center justify-center gap-2 py-3 text-[13px] text-outline">

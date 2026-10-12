@@ -254,7 +254,7 @@ export function ArtifactViewer({
                 <div className="inline-block px-2.5 py-0.5 rounded bg-surface-container text-[11px] uppercase tracking-wider text-outline font-semibold">
                   {artifact.badge || 'Executive Playbook'}
                 </div>
-                <h2 className="text-[24px] font-bold text-on-surface tracking-tight leading-tight">
+                <h2 className="text-[26px] font-bold text-on-surface tracking-tight leading-tight">
                   {artifact.title}
                 </h2>
                 {artifact.subtitle && (
@@ -265,35 +265,35 @@ export function ArtifactViewer({
               </header>
 
               {/* Render Structured Content */}
-              <div className="prose prose-sm max-w-none space-y-4 text-[14.5px] leading-relaxed text-on-surface">
+              <div className="max-w-none text-[15.5px] leading-[1.7] text-on-surface">
                 {rawContent.split('\n\n').map((block, idx) => {
                   const trimmed = block.trim();
                   if (!trimmed) return null;
 
                   if (trimmed.startsWith('# ')) {
                     return (
-                      <h1 key={idx} className="text-[22px] font-bold text-on-surface tracking-tight pt-2 border-b border-[#EAEAE7] pb-2">
+                      <h1 key={idx} className="text-[27px] font-bold text-on-surface tracking-tight mt-7 mb-3.5 pt-2 border-b border-[#EAEAE7] pb-2 leading-tight">
                         {trimmed.replace(/^#\s+/, '')}
                       </h1>
                     );
                   }
                   if (trimmed.startsWith('## ')) {
                     return (
-                      <h2 key={idx} className="text-[18px] font-semibold text-on-surface pt-3 border-b border-[#EAEAE7]/60 pb-1.5">
+                      <h2 key={idx} className="text-[22px] font-bold text-on-surface tracking-tight mt-6 mb-3 pt-2 border-b border-[#EAEAE7]/60 pb-1.5 leading-snug">
                         {trimmed.replace(/^##\s+/, '')}
                       </h2>
                     );
                   }
                   if (trimmed.startsWith('### ')) {
                     return (
-                      <h3 key={idx} className="text-[15.5px] font-semibold text-on-surface pt-2">
+                      <h3 key={idx} className="text-[18px] font-semibold text-on-surface mt-5 mb-2 leading-snug">
                         {trimmed.replace(/^###\s+/, '')}
                       </h3>
                     );
                   }
                   if (trimmed.startsWith('> ')) {
                     return (
-                      <blockquote key={idx} className="p-3.5 rounded-xl bg-primary-fixed/20 border-l-4 border-primary text-[14px] text-on-surface italic">
+                      <blockquote key={idx} className="p-3.5 rounded-xl bg-primary-fixed/20 border-l-4 border-primary text-[14.5px] text-on-surface italic my-4 leading-[1.7]">
                         {trimmed.replace(/^>\s+/, '')}
                       </blockquote>
                     );
@@ -301,9 +301,9 @@ export function ArtifactViewer({
                   if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
                     const items = trimmed.split('\n').filter((l) => l.trim().match(/^[-*]\s+/));
                     return (
-                      <ul key={idx} className="list-disc pl-5 space-y-1.5 text-on-surface">
+                      <ul key={idx} className="list-disc pl-6 space-y-2 text-on-surface leading-[1.7] my-4">
                         {items.map((item, i) => (
-                          <li key={i} dangerouslySetInnerHTML={{ __html: renderInlineMarkdown(item.replace(/^[-*]\s+/, '')) }} />
+                          <li key={i} className="leading-[1.7] pl-1" dangerouslySetInnerHTML={{ __html: renderInlineMarkdown(item.replace(/^[-*]\s+/, '')) }} />
                         ))}
                       </ul>
                     );
@@ -311,15 +311,15 @@ export function ArtifactViewer({
                   if (trimmed.match(/^\d+\.\s+/)) {
                     const items = trimmed.split('\n').filter((l) => l.trim().match(/^\d+\.\s+/));
                     return (
-                      <ol key={idx} className="list-decimal pl-5 space-y-1.5 text-on-surface">
+                      <ol key={idx} className="list-decimal pl-6 space-y-2 text-on-surface leading-[1.7] my-4">
                         {items.map((item, i) => (
-                          <li key={i} dangerouslySetInnerHTML={{ __html: renderInlineMarkdown(item.replace(/^\d+\.\s+/, '')) }} />
+                          <li key={i} className="leading-[1.7] pl-1" dangerouslySetInnerHTML={{ __html: renderInlineMarkdown(item.replace(/^\d+\.\s+/, '')) }} />
                         ))}
                       </ol>
                     );
                   }
                   return (
-                    <p key={idx} dangerouslySetInnerHTML={{ __html: renderInlineMarkdown(trimmed) }} />
+                    <p key={idx} className="my-4 text-[15.5px] leading-[1.7]" dangerouslySetInnerHTML={{ __html: renderInlineMarkdown(trimmed) }} />
                   );
                 })}
               </div>
@@ -377,7 +377,7 @@ export function ArtifactViewer({
                 {copiedDoc ? 'Copied' : `Copy ${isHtml ? 'HTML' : 'Markdown'}`}
               </button>
             </div>
-            <pre className="p-4 rounded-xl bg-surface-container-low border border-surface-container-high text-[12.5px] font-mono leading-relaxed overflow-x-auto whitespace-pre-wrap text-on-surface select-text">
+            <pre className="p-5 rounded-xl bg-surface-container-low border border-surface-container-high text-[13px] font-mono leading-[1.6] overflow-x-auto whitespace-pre-wrap text-on-surface select-text">
               {rawContent}
             </pre>
           </div>
